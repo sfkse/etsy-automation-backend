@@ -1,0 +1,98 @@
+# Etsy Takı Otomasyon — Cursor Rules
+
+You are a senior Python developer implementing a local-only Etsy jewelry-store automation system. Your output goes into a repository the user runs on their own machine. Follow these rules in every response.
+
+## Project Identity
+- **Stack:** Python 3.11+, FastAPI, PostgreSQL 16 (via Docker), SQLAlchemy 2.x + Alembic, asyncio, Jinja2, pytest
+- **AI:** anthropic SDK (Claude), Gemini, OpenAI, fal.ai (Flux) for images, sentence-transformers for embeddings
+- **No production cloud, no Redis/Celery, no Kubernetes, no React/Vue.** Server-side templates.
+- **Docker postgres counts as local** — single container, `docker compose up -d`.
+
+## Implementation Philosophy
+1. **Incremental.** Implement one Step, validate it (run code or write a test), then move on. Don't write 5 modules in one shot.
+2. **Business rules are sacred.** Hard rules from `docs/02-business-rules.md` are validators, not suggestions. Reject your own output if it violates.
+3. **Modular.** Each module is independently testable. Use dependency injection — never reach across module boundaries.
+4. **No magic.** Explicit over implicit. Log every decision. Type hints everywhere.
+5. **Local-first.** All paths are relative or under `./data/`. No `/etc/`, no `~/.config/`.
+
+## Strict Business Rules (MEMORIZE — these are validators)
+- **Title:** exactly 137-140 chars; comma-space separator (never pipe); first letter of each word capitalized; first 60 chars are niche description (no big terms like "Gift for Mom"); 2-3 synonyms for main product; max 1-2 big-search terms at end
+- **Forbidden words in title:** "Stone" (use CZ or Pave), "Pendant" alone (must be "Pendant Necklace"), "Solid Gold" + "Gold Plated" combo, repeated words, "Mother's Day Gift" (use "Gifts for Mom"), "Diamond" for brass/plated, "Floral" for letter-flowers (only visual flowers)
+- **Tags:** exactly 13. Distribution: 8-9 niche + 2-3 medium + 1-2 big. No duplicates with title's substantial phrases.
+- **Description:** 150-220 words. Originality ≥ 96% vs corpus (cosine similarity < 0.85 via sentence-transformers). No clichés from the static + research-derived blacklist.
+- **Images:** minimum 8 per listing. SEO-named filenames. Alt text per image.
+- **Quantity:** 999 (confident) or 10-300 (test). Never 1 (kills algorithm).
+- **Renew:** 17:00 / 21:00 / 02:00 / 05:00 Turkey time.
+- **Carrier pillars (only valid product categories):** Cross, Name, Birthstone, Birth Flower, Pet, Pendant Necklace.
+- **AI-generated images:** never present as "real photo" — alt text must imply lifestyle/concept.
+
+## Variant Architecture (Phase 6 core)
+Every product generates **3 variants** (not 1, not 5):
+- **Variant A — Conservative niche** (closest to bestseller patterns)
+- **Variant B — Differentiated** (uses underused / low-volume niche tags heavily)
+- **Variant C — Gift-focused** (or seasonal swap: Holiday Oct-Dec, Valentines Feb, Mothers Day Apr-May, Premium for 14K solid gold)
+
+Each variant is a complete coherent listing: title + 13 tags + description, all aligned to the same angle. Volume-aware tag distribution per angle:
+- A: 6 mainstream / 4 medium / 3 niche
+- B: 2 mainstream / 4 medium / **7 niche**
+- C: 5 mainstream / 5 medium / 3 niche
+
+User picks one in the approval UI, or hybrid-edits to mix fields between variants.
+
+## Docs Layout (READ ONLY WHAT THE TASK NEEDS)
+The full spec is split into focused files in `docs/`. Don't re-read everything every time — read only what the current task needs:
+
+- `docs/01-architecture.md` — module boundaries, pipeline flow
+- `docs/02-business-rules.md` — all hard rules (validators)
+- `docs/03-phase1-foundation.md` — project structure, Docker, settings, DB setup
+- `docs/04-phase2-domain.md` — domain models (Product, ProductImage, etc) + validators
+- `docs/05-phase3-research.md` — CSV import + research analyzers + dashboard
+- `docs/06-phase4-input.md` — manual input UI
+- `docs/07-phase5-images.md` — AI image pipeline (3 workflows)
+- `docs/08-phase6-llm.md` — variant generation + orchestrator
+- `docs/09-phase7-approval.md` — 3-column approval UI
+- `docs/10-phase8-etsy.md` — Etsy API integration
+- `docs/11-phase9-scheduler.md` — APScheduler + renew + tracking
+- `docs/12-phase10-sheets.md` — Google Sheets sync (optional)
+- `docs/00-full-spec.md` — the entire 3,400-line spec (only attach when truly lost)
+
+When the user asks for help with a specific Phase, **attach only that doc** (and `docs/02-business-rules.md` if generating any content). Don't pull `00-full-spec.md` — it burns ~50K tokens.
+
+## What "Done" Means per Step
+Each Step in a Phase doc ends with a **Validation** block. A step is done when:
+1. The code in the step works (run it, see expected output)
+2. Validation criteria all pass
+3. You wrote/updated a pytest test (where applicable)
+4. The user can verify it themselves with one command
+
+Don't mark a step done because the code "looks right". Run it.
+
+## Code Style
+- Type hints on every public function signature
+- Async functions return concrete types (not `Any`)
+- Pydantic models for all API inputs/outputs
+- Use `structlog` (or stdlib `logging`) — never `print()` in src/
+- `f"..."` over `.format()` over `%`
+- One class per file when class > 50 lines
+- File names snake_case; class names PascalCase
+
+## File-System Conventions
+- Source: `src/`
+- Tests: `tests/`
+- Data: `./data/` (gitignored except for `keyword_pool.csv`)
+- Migrations: `alembic/versions/`
+- Static: `src/web/static/`
+- Templates: `src/web/templates/`
+
+## Output Format
+- When asked to implement something, output **the file(s) needed** in code blocks with the path as a comment header
+- When asked to fix a bug, output **only the diff**, not the whole file
+- When unsure about a design choice, ask **one focused question**, don't enumerate 5 options
+- Don't restate the user's task back to them; just do it.
+
+## Anti-patterns to Avoid
+- Don't reimplement business rules in multiple places — single source of truth in `src/config/business_rules.py`
+- Don't skip the validator on "obviously-ok" cases — always run it
+- Don't write tests after every line — tests for behaviors, not implementation details
+- Don't add features the spec doesn't mention. Phase scope is the spec scope.
+- Don't add try/except around everything — only where errors are expected and recoverable

@@ -1,0 +1,38 @@
+# ─── Environment ──────────────────────────────────────────────────────────────
+.env
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ─── Data (generated/user-uploaded, never committed except pool CSVs) ─────────
+data/images/
+data/research/
+
+# ─── Alembic generated ────────────────────────────────────────────────────────
+# versions are committed; the DB itself is not
+*.db
+*.sqlite3
+
+# ─── IDE / OS ─────────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ─── Test / Coverage ──────────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

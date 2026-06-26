@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: etsy_taki_pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: etsy_taki
+      POSTGRES_USER: etsy
+      POSTGRES_PASSWORD: etsy_local_dev   # local-only; override via .env if you want
+    ports:
+      - "5432:5432"
+    volumes:
+      - etsy_taki_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U etsy -d etsy_taki"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  etsy_taki_pgdata:
