@@ -81,6 +81,7 @@ class Product(Base):
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
     approval_overrides = relationship("ApprovalOverride", back_populates="product")
+    renew_logs = relationship("RenewLog", back_populates="product")
 
 
 class ProductImage(Base):
@@ -138,6 +139,21 @@ class ProductStats(Base):
     sales = Column(Integer, default=0)
 
     product = relationship("Product", back_populates="stats")
+
+
+class RenewLog(Base):
+    """Audit log of every listing renewal attempt."""
+
+    __tablename__ = "renew_log"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    listing_id = Column(String(50), nullable=False)
+    renewed_at = Column(DateTime, default=datetime.utcnow)
+    success = Column(Boolean, default=True)
+    error_message = Column(Text)
+
+    product = relationship("Product", back_populates="renew_logs")
 
 
 # ---------------------------------------------------------------------------

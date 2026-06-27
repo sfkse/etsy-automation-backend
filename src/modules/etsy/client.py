@@ -105,3 +105,35 @@ class EtsyClient:
             f"/application/seller-taxonomy/nodes/{taxonomy_id}/properties"
         )
         return resp.get("results", [])
+
+    # ── Phase 9: Stats & Renewal ───────────────────────────────────────────────
+
+    async def get_listing_stats(
+        self,
+        listing_id: str,
+        start_date: str,
+        end_date: str,
+    ) -> dict:
+        """Fetch daily stats for a listing.
+
+        Args:
+            listing_id: Etsy listing ID string.
+            start_date: ISO date string "YYYY-MM-DD".
+            end_date:   ISO date string "YYYY-MM-DD".
+
+        Returns Etsy stats payload (visits, views, transactions, revenue keys).
+        """
+        return await self.get(
+            f"/application/shops/{self.shop_id}/listings/{listing_id}/stats",
+            params={"start_date": start_date, "end_date": end_date},
+        )
+
+    async def renew_listing(self, listing_id: str) -> dict:
+        """Renew a listing, resetting its 4-month expiry timer.
+
+        Calls POST /application/shops/{shop_id}/listings/{listing_id}/renew.
+        Returns the updated listing dict on success.
+        """
+        return await self.post(
+            f"/application/shops/{self.shop_id}/listings/{listing_id}/renew"
+        )
