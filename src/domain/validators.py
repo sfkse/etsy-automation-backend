@@ -11,6 +11,8 @@ from sentence_transformers import SentenceTransformer
 from src.config.business_rules import (
     CLICHE_DESCRIPTION_PHRASES,
     DESCRIPTION_MAX_SIMILARITY,
+    DESCRIPTION_MAX_WORDS,
+    DESCRIPTION_MIN_WORDS,
     FORBIDDEN_TAG_PHRASES,
     FORBIDDEN_TITLE_KEYWORDS,
     PENDANT_MUST_BE,
@@ -132,6 +134,29 @@ def validate_tags(
 
 
 # ─── Description ──────────────────────────────────────────────────────────────
+
+
+def validate_description(description: str) -> tuple[bool, list[str]]:
+    """
+    Validate *description* against Section 1.3 business rules:
+    word count (150-220) and absence of cliché phrases.
+
+    Returns ``(is_valid, violations)``.
+    """
+    violations: list[str] = []
+
+    word_count = len(description.split())
+    if not (DESCRIPTION_MIN_WORDS <= word_count <= DESCRIPTION_MAX_WORDS):
+        violations.append(
+            f"Word count {word_count} not in [{DESCRIPTION_MIN_WORDS}, {DESCRIPTION_MAX_WORDS}]"
+        )
+
+    desc_lower = description.lower()
+    for phrase in CLICHE_DESCRIPTION_PHRASES:
+        if phrase.lower() in desc_lower:
+            violations.append(f"Cliché phrase found: '{phrase}'")
+
+    return (len(violations) == 0, violations)
 
 
 class OriginalityChecker:
