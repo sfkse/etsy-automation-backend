@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Products — Etsy Automation{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h2 class="mb-0">Products</h2>
+    <p class="text-muted mb-0">{{ products | length }} product{{ 's' if products | length != 1 }}</p>
+  </div>
+  <a href="/products/new" class="btn btn-primary">+ New Product</a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if products %}
+
+<!-- Sort controls -->
+<div class="d-flex align-items-center gap-2 mb-3">
+  <span class="text-muted small">Sort by:</span>
+  {% set sorts = [('newest', 'Newest'), ('oldest', 'Oldest'), ('sku', 'SKU'), ('status', 'Status')] %}
+  {% for val, label in sorts %}
+  <a href="/products?sort={{ val }}"
+     class="btn btn-sm {{ 'btn-dark' if sort == val else 'btn-outline-secondary' }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card border-0 shadow-sm">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>SKU</th>
+          <th>Carrier Pillar</th>
+          <th>Material</th>
+          <th>Color</th>
+          <th>Status</th>
+          <th class="text-end">Cost</th>
+          <th class="text-end">Selling Price</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for product in products %}
+        <tr style="cursor:pointer;" onclick="location.href='/products/{{ product.sku }}'">
+          <td><code class="fw-semibold text-dark">{{ product.sku }}</code></td>
+          <td>{{ product.carrier_pillar | replace('_', ' ') | title }}</td>
+          <td>{{ product.material or '—' }}</td>
+          <td>{{ product.color or '—' }}</td>
+          <td>
+            <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }}">
+              {{ status_labels.get(product.status, product.status) }}
+            </span>
+          </td>
+          <td class="text-end text-muted">
+            {% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-end text-muted">
+            {% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}
+          </td>
+          <td class="text-muted small">{{ product.created_at.strftime('%Y-%m-%d') if product.created_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+
+<div class="text-center py-5">
+  <div style="font-size:3rem;">💍</div>
+  <h4 class="text-muted mt-3">No products yet</h4>
+  <p class="text-muted">Add your first product to get started.</p>
+  <a href="/products/new" class="btn btn-primary">+ New Product</a>
+</div>
+
+{% endif %}
+{% endblock %}

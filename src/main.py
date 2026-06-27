@@ -1,10 +1,12 @@
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from src.web.routes import research as research_routes
+from src.web.routes import input as input_routes
 
 app = FastAPI(
     title="Etsy Jewelry Automation",
@@ -18,5 +20,12 @@ templates = Jinja2Templates(directory="src/web/templates")
 templates.env.filters["urlencode"] = quote_plus
 
 research_routes.set_templates(templates)
+input_routes.set_templates(templates)
 
 app.include_router(research_routes.router)
+app.include_router(input_routes.router)
+
+
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/products", status_code=302)

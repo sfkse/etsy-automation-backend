@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}{{ product.sku }} — Processing…{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-4">
+  <a href="/products/{{ product.sku }}" class="text-muted text-decoration-none small">← Back to {{ product.sku }}</a>
+</div>
+
+<div class="text-center py-5">
+  <div id="spinner-icon" style="font-size:3rem;">⚙️</div>
+
+  <div class="my-3">
+    <div class="spinner-border text-primary" role="status" style="width:2.5rem;height:2.5rem;" id="spinner">
+      <span class="visually-hidden">Processing…</span>
+    </div>
+  </div>
+
+  <h3 class="mb-1" id="status-title">Processing <code>{{ product.sku }}</code></h3>
+
+  <p class="text-muted mb-1" id="status-label">
+    <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }}" id="status-badge">
+      {{ status_labels.get(product.status, product.status) }}
+    </span>
+  </p>
+
+  <p class="text-muted small" id="status-desc">The AI pipeline is running. This page refreshes automatically.</p>
+
+  <div class="mt-4">
+    <a href="/products/{{ product.sku }}" class="btn btn-outline-secondary btn-sm">View Product</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  const sku = {{ product.sku | tojson }};
+  const statusLabels = {{ status_labels | tojson }};
+  const statusBadgeClass = {{ status_badge_class | tojson }};
+  let pollCount = 0;
+
+  const badgeEl   = document.getElementById('status-badge');
+  const descEl    = document.getElementById('status-desc');
+  const spinnerEl = document.getElementById('spinner');
+
+  async function poll() {
+    try {
+      const res = await fetch(`/products/${sku}/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // Update badge
+      const label = statusLabels[data.status] || data.status;
+      const cls   = statusBadgeClass[data.status] || 'secondary';
+      badgeEl.textContent = label;
+      badgeEl.className   = `badge bg-${cls}`;
+
+      // Update description
+      const desc = {
+        image_processing:   'Generating and enhancing product images…',
+        content_generating: 'Writing titles, tags and descriptions…',
+        awaiting_approval:  'Done! Redirecting to approval…',
+        approved:           'Content approved. Redirecting…',
+        published:          'Live on Etsy! Redirecting…',
+        failed:             'Something went wrong. Redirecting to product page…',
+      };
+      descEl.textContent = desc[data.status] || 'Processing…';
+
+      if (data.redirect) {
+        spinnerEl.classList.add('d-none');
+        setTimeout(() => { window.location.href = data.redirect; }, 1200);
+        return;  // stop polling
+      }
+    } catch (e) {
+      console.warn('Poll error:', e);
+    }
+    pollCount++;
+    setTimeout(poll, 3000);
+  }
+
+  // Start polling after a short initial delay
+  setTimeout(poll, 2000);
+})();
+</script>
+{% endblock %}

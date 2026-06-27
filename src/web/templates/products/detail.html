@@ -1,0 +1,263 @@
+{% extends "base.html" %}
+{% block title %}{{ product.sku }} — Etsy Automation{% endblock %}
+
+{% block content %}
+
+<!-- Header -->
+<div class="d-flex align-items-start justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <a href="/products" class="text-muted text-decoration-none small">← All Products</a>
+    </div>
+    <h2 class="mb-0 d-flex align-items-center gap-2">
+      <code>{{ product.sku }}</code>
+      <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }} fs-6 fw-normal">
+        {{ status_labels.get(product.status, product.status) }}
+      </span>
+    </h2>
+    <p class="text-muted mb-0">{{ product.carrier_pillar | replace('_', ' ') | title }}
+      {% if product.material %} · {{ product.material }}{% endif %}
+      {% if product.created_at %} · Created {{ product.created_at.strftime('%Y-%m-%d') }}{% endif %}
+    </p>
+  </div>
+
+  <!-- ── Status-dependent action area ──────────────────────────────── -->
+  <div class="d-flex flex-column align-items-end gap-2">
+
+    {% if product.status == 'manual_input' %}
+    <form method="post" action="/products/{{ product.sku }}/process" class="d-flex align-items-center gap-2">
+      <div class="input-group" style="width:auto;">
+        <label class="input-group-text" for="workflow">Workflow</label>
+        <select class="form-select form-select-sm" id="workflow" name="workflow" style="min-width:110px;">
+          {% for w in workflow_options %}
+          <option value="{{ w }}" {% if w == default_workflow %}selected{% endif %}>{{ w | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-success px-4">
+        ▶ Process Product
+      </button>
+    </form>
+
+    {% elif product.status in ('image_processing', 'content_generating') %}
+    <a href="/products/{{ product.sku }}/progress" class="btn btn-info text-white">
+      ⏳ View Progress
+    </a>
+
+    {% elif product.status == 'awaiting_approval' %}
+    <a href="/approval/{{ product.sku }}" class="btn btn-warning">
+      ✅ Review &amp; Approve
+    </a>
+
+    {% elif product.status == 'published' %}
+    {% if product.etsy_listing_id %}
+    <a href="https://www.etsy.com/listing/{{ product.etsy_listing_id }}" target="_blank" rel="noopener" class="btn btn-outline-success">
+      🔗 View Live Listing ↗
+    </a>
+    {% endif %}
+
+    {% elif product.status == 'failed' %}
+    <form method="post" action="/products/{{ product.sku }}/process" class="d-flex align-items-center gap-2">
+      <div class="input-group" style="width:auto;">
+        <label class="input-group-text" for="workflow_retry">Workflow</label>
+        <select class="form-select form-select-sm" id="workflow_retry" name="workflow" style="min-width:110px;">
+          {% for w in workflow_options %}
+          <option value="{{ w }}" {% if (product.image_workflow_used or default_workflow) == w %}selected{% endif %}>{{ w | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-danger px-4">↺ Retry</button>
+    </form>
+    {% endif %}
+
+  </div>
+</div>
+
+<div class="row g-4">
+
+  <!-- ── Left: product fields ─────────────────────────────────────── -->
+  <div class="col-lg-7">
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Product Details</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4 text-muted">Carrier Pillar</dt>
+          <dd class="col-sm-8">{{ product.carrier_pillar | replace('_', ' ') | title }}</dd>
+
+          <dt class="col-sm-4 text-muted">Material</dt>
+          <dd class="col-sm-8">{{ product.material or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Color</dt>
+          <dd class="col-sm-8">{{ product.color or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Has Stone</dt>
+          <dd class="col-sm-8">
+            {% if product.has_stone %}
+              Yes{% if product.stone_type %} — <em>{{ product.stone_type }}</em>{% endif %}
+            {% else %}No{% endif %}
+          </dd>
+
+          <dt class="col-sm-4 text-muted">Shape</dt>
+          <dd class="col-sm-8">{{ product.shape or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Style</dt>
+          <dd class="col-sm-8">{{ product.style or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Occasion</dt>
+          <dd class="col-sm-8">{{ product.occasion or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Recipient</dt>
+          <dd class="col-sm-8">{{ product.recipient or '—' }}</dd>
+
+          <dt class="col-sm-4 text-muted">Size Info</dt>
+          <dd class="col-sm-8">{{ product.size_info or '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Pricing</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4 text-muted">Cost</dt>
+          <dd class="col-sm-8">{% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}</dd>
+
+          <dt class="col-sm-4 text-muted">Selling Price</dt>
+          <dd class="col-sm-8">{% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}</dd>
+
+          {% if product.cost and product.selling_price %}
+          <dt class="col-sm-4 text-muted">Margin</dt>
+          <dd class="col-sm-8 text-success fw-semibold">
+            {{ "%.0f" | format(((product.selling_price | float - product.cost | float) / product.selling_price | float * 100)) }}%
+          </dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+
+    {% if product.status in ('awaiting_approval', 'approved', 'published') and product.generated_variants %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Generated Variants</div>
+      <div class="card-body">
+        {% for variant in product.generated_variants %}
+        <div class="border rounded p-3 mb-3 {{ 'border-success' if product.selected_variant_id == variant.get('id') }}">
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="badge bg-dark">Variant {{ variant.get('id', '?') }}</span>
+            {% if product.selected_variant_id == variant.get('id') %}
+            <span class="badge bg-success">Selected</span>
+            {% endif %}
+          </div>
+          {% if variant.get('title') %}
+          <p class="mb-1 small fw-semibold">{{ variant.get('title') }}</p>
+          {% endif %}
+          {% if variant.get('tags') %}
+          <div class="mb-1">
+            {% for tag in variant.get('tags', []) %}
+            <span class="tag-chip">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if product.final_title or product.final_description %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Approved Content</div>
+      <div class="card-body">
+        {% if product.final_title %}
+        <p class="mb-1 fw-semibold">{{ product.final_title }}</p>
+        {% endif %}
+        {% if product.final_tags %}
+        <div class="mb-2">
+          {% for tag in product.final_tags %}
+          <span class="tag-chip">{{ tag }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if product.final_description %}
+        <p class="small text-muted mt-2 mb-0" style="white-space:pre-wrap;">{{ product.final_description }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if product.etsy_listing_id %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Etsy Listing</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4 text-muted">Listing ID</dt>
+          <dd class="col-sm-8"><code>{{ product.etsy_listing_id }}</code></dd>
+          <dt class="col-sm-4 text-muted">Published</dt>
+          <dd class="col-sm-8">{{ product.published_at.strftime('%Y-%m-%d %H:%M') if product.published_at else '—' }}</dd>
+        </dl>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <!-- ── Right: images ────────────────────────────────────────────── -->
+  <div class="col-lg-5">
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">
+        Images <span class="text-muted fw-normal small">({{ images | length }})</span>
+      </div>
+      <div class="card-body">
+        {% if images %}
+        <div class="thumbnail-grid">
+          {% for img in images %}
+          <div class="thumbnail-card">
+            {% set filename = img.file_path.split('/')[-1] if img.file_path else '' %}
+            <div class="bg-light d-flex align-items-center justify-content-center"
+                 style="aspect-ratio:1; font-size:.7rem; color:#999; overflow:hidden;">
+              {% if img.file_path %}
+              <span class="p-2 text-center text-break" style="word-break:break-all;">{{ filename }}</span>
+              {% else %}
+              <span>No image</span>
+              {% endif %}
+            </div>
+            <div class="info d-flex justify-content-between align-items-center">
+              <span class="text-muted">#{{ img.rank }}</span>
+              <div class="d-flex gap-1">
+                {% if img.is_real %}<span class="badge bg-success" style="font-size:.65rem;">Real</span>{% endif %}
+                {% if img.is_selected %}<span class="badge bg-primary" style="font-size:.65rem;">Primary</span>{% endif %}
+                {% if img.workflow_source %}
+                <span class="badge bg-secondary" style="font-size:.65rem;">{{ img.workflow_source }}</span>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted text-center py-3">No images yet.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Pipeline status card -->
+    {% if product.image_workflow_used %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Pipeline</div>
+      <div class="card-body small">
+        <dl class="row mb-0">
+          <dt class="col-6 text-muted">Workflow</dt>
+          <dd class="col-6">{{ product.image_workflow_used | title }}</dd>
+          {% if product.approved_at %}
+          <dt class="col-6 text-muted">Approved</dt>
+          <dd class="col-6">{{ product.approved_at.strftime('%Y-%m-%d') }}</dd>
+          {% endif %}
+        </dl>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}
