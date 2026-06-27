@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Etsy Publishing — Admin{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+  <div class="col">
+    <h2>Etsy Publishing</h2>
+    <p class="text-muted">Shop ID: <code>{{ shop_id or "not configured" }}</code></p>
+  </div>
+</div>
+
+{# ── Flash messages ── #}
+{% if request.query_params.get("connected") %}
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+  <strong>Connected!</strong> Etsy account linked successfully.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if request.query_params.get("disconnected") %}
+<div class="alert alert-secondary alert-dismissible fade show" role="alert">
+  Etsy account disconnected.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if request.query_params.get("publishing") %}
+<div class="alert alert-info alert-dismissible fade show" role="alert">
+  <strong>Publishing started</strong> in the background. Refresh this page to track progress.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% set err = request.query_params.get("error") %}
+{% if err %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+  <strong>Error:</strong>
+  {% if err == "not_connected" %}Not connected to Etsy. Please connect first.
+  {% elif err == "access_denied" %}Etsy access was denied.
+  {% elif err == "exchange_failed" %}Token exchange failed. Please try connecting again.
+  {% elif err == "missing_params" %}OAuth callback missing required parameters.
+  {% else %}{{ err }}{% endif %}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  {# ── Connection card ── #}
+  <div class="col-md-5">
+    <div class="card h-100">
+      <div class="card-header fw-semibold">Etsy Connection</div>
+      <div class="card-body d-flex flex-column gap-3">
+        <div class="d-flex align-items-center gap-2">
+          {% if connected %}
+          <span class="badge bg-success fs-6">● Connected</span>
+          {% else %}
+          <span class="badge bg-secondary fs-6">○ Not connected</span>
+          {% endif %}
+        </div>
+
+        {% if not connected %}
+        <a href="/admin/etsy/connect" class="btn btn-primary">
+          Connect to Etsy
+        </a>
+        <small class="text-muted">
+          You will be redirected to Etsy to grant listing permissions.
+        </small>
+        {% else %}
+        <form method="POST" action="/admin/etsy/disconnect"
+              onsubmit="return confirm('Remove Etsy connection?')">
+          <button type="submit" class="btn btn-outline-danger btn-sm">
+            Disconnect
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Daily stats card ── #}
+  <div class="col-md-7">
+    <div class="card h-100">
+      <div class="card-header fw-semibold">Today's Publishing</div>
+      <div class="card-body">
+        <div class="row text-center mb-3">
+          <div class="col-4">
+            <div class="fs-3 fw-bold text-success">{{ approved_count }}</div>
+            <div class="text-muted small">Approved &amp; ready</div>
+          </div>
+          <div class="col-4">
+            <div class="fs-3 fw-bold">{{ published_today }}</div>
+            <div class="text-muted small">Published today</div>
+          </div>
+          <div class="col-4">
+            <div class="fs-3 fw-bold {% if remaining_today == 0 %}text-danger{% else %}text-primary{% endif %}">
+              {{ remaining_today }}
+            </div>
+            <div class="text-muted small">Remaining (limit {{ daily_limit }})</div>
+          </div>
+        </div>
+
+        {% if remaining_today == 0 %}
+        <div class="alert alert-warning mb-0">Daily publish limit reached. Come back tomorrow.</div>
+        {% elif not connected %}
+        <div class="alert alert-secondary mb-0">Connect to Etsy to enable publishing.</div>
+        {% else %}
+        <form method="POST" action="/admin/etsy/publish">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Publish approved products</label>
+            <input type="text" name="skus_raw" class="form-control"
+                   placeholder="Leave blank for all approved, or enter: SKU-001, SKU-002, …">
+            <div class="form-text">Leaving blank will publish up to {{ remaining_today }} oldest-approved products.</div>
+          </div>
+          <button type="submit" class="btn btn-success"
+                  onclick="return confirm('Start bulk publish now?')">
+            🚀 Start Bulk Publish
+          </button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>{# /row #}
+
+{# ── Approved products list ── #}
+<div class="mt-5">
+  <h5>Approved Products Awaiting Publish</h5>
+  {% if approved_count == 0 %}
+  <p class="text-muted">No approved products waiting to be published.</p>
+  {% else %}
+  <a href="/approval" class="btn btn-outline-secondary btn-sm mb-3">View Approval Queue</a>
+  {% endif %}
+</div>
+
+{% endblock %}

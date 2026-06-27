@@ -16,10 +16,16 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     FAL_API_KEY: str = ""
 
-    # Etsy
+    # Etsy OAuth
     ETSY_API_KEY: str = ""
     ETSY_SHARED_SECRET: str = ""
     ETSY_SHOP_ID: str = ""
+    ETSY_REDIRECT_URI: str = "http://localhost:8000/admin/etsy/callback"
+
+    # Etsy shop configuration
+    SHIPPING_PROFILE_ID: int = 0
+    RETURN_POLICY_ID: int = 0
+    SHOP_CREATION_DATE: str = ""  # ISO date, e.g. "2024-06-01" — used for new-shop limits
 
     # Database
     DATABASE_URL: str = "postgresql+psycopg://etsy:etsy_local_dev@localhost:5432/etsy_taki"

@@ -39,6 +39,9 @@ dependencies = [
     # HTTP
     "httpx>=0.27.2",
 
+    # Encryption (Etsy token storage)
+    "cryptography>=42.0.0",
+
     # Data processing
     "pandas>=2.2.0",
 
