@@ -10,6 +10,7 @@ from src.config.settings import Settings
 from src.web.routes import research as research_routes
 from src.web.routes import input as input_routes
 from src.web.routes import content as content_routes
+from src.web.routes import approval as approval_routes
 
 _settings = Settings()
 
@@ -32,10 +33,12 @@ templates.env.filters["urlencode"] = quote_plus
 research_routes.set_templates(templates)
 input_routes.set_templates(templates)
 content_routes.set_templates(templates)
+approval_routes.set_templates(templates)
 
 app.include_router(research_routes.router)
 app.include_router(input_routes.router)
 app.include_router(content_routes.router)
+app.include_router(approval_routes.router)
 
 
 @app.get("/")

@@ -1,0 +1,718 @@
+{% extends "base.html" %}
+{% block title %}Approve {{ product.sku }} — Etsy Automation{% endblock %}
+
+{% block content %}
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <a href="/approval" class="text-muted text-decoration-none small">← Approval Queue</a>
+    <h2 class="mb-0 mt-1 d-flex align-items-center gap-2">
+      <code>{{ product.sku }}</code>
+      <span class="badge bg-warning text-dark fw-normal fs-6">Awaiting Approval</span>
+    </h2>
+    <p class="text-muted mb-0">
+      {{ product.carrier_pillar | replace('_', ' ') | title }}
+      {% if product.material %} · {{ product.material }}{% endif %}
+      {% if product.created_at %} · {{ product.created_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+    </p>
+  </div>
+</div>
+
+<!-- Hidden overrides accumulator -->
+<input type="hidden" id="overrides-store" value="[]">
+
+<!-- ── 3-Column Variant Grid ───────────────────────────────────────────────── -->
+<form id="approve-form" method="post" action="/approval/{{ product.sku }}/approve">
+  <input type="hidden" name="variant_id" id="selected-variant-input" value="{{ selected_id }}">
+  <input type="hidden" name="overrides_json" id="overrides-json-input" value="[]">
+
+  <div class="row g-3 mb-4" id="variant-grid">
+    {% for v in variants %}
+    {% set vid = v.get('id', loop.index | string) %}
+    {% set is_selected = (vid == selected_id) %}
+    {% set ctr = v.get('estimated_ctr_signal', 'unknown') %}
+
+    <div class="col-lg-4 col-md-6 variant-col" data-variant-id="{{ vid }}">
+      <div class="card h-100 border-2 variant-card {% if is_selected %}border-warning shadow{% else %}border-light{% endif %}"
+           id="card-{{ vid }}">
+        <div class="card-header bg-white border-bottom d-flex align-items-center gap-2 py-2">
+          <!-- Radio selector -->
+          <div class="form-check mb-0">
+            <input class="form-check-input variant-radio" type="radio"
+                   name="variant_radio" id="radio-{{ vid }}" value="{{ vid }}"
+                   {% if is_selected %}checked{% endif %}>
+            <label class="form-check-label fw-bold" for="radio-{{ vid }}">
+              VARIANT {{ vid }}
+            </label>
+          </div>
+          <span class="badge bg-{{ ctr_badge.get(ctr, 'light') }} ms-auto">CTR: {{ ctr | upper }}</span>
+          <span class="badge bg-secondary fw-normal" style="font-size:.72rem;">{{ v.get('strategy_label', '') }}</span>
+        </div>
+
+        <div class="card-body p-3 d-flex flex-column gap-3">
+
+          <!-- Strategy Rationale -->
+          <div class="border-start border-3 border-secondary ps-2 text-muted small">
+            {{ v.get('strategy_rationale', '') }}
+          </div>
+
+          <!-- Title -->
+          <div>
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Title</label>
+              <span class="badge bg-light text-dark border title-char-count" id="title-count-{{ vid }}">
+                {{ v.get('title', '') | length }} chars
+              </span>
+            </div>
+            <div class="field-violations small text-danger mb-1" id="title-violations-{{ vid }}"></div>
+            <div contenteditable="true"
+                 class="editable-field border rounded p-2 small"
+                 data-field="title"
+                 data-variant="{{ vid }}"
+                 id="title-{{ vid }}"
+                 style="min-height:4.5rem; line-height:1.4;">{{ v.get('title', '') }}</div>
+          </div>
+
+          <!-- Tags -->
+          <div>
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Tags</label>
+              <span class="badge bg-light text-dark border" id="tags-count-{{ vid }}">
+                {{ v.get('tags', []) | length }}/13
+              </span>
+            </div>
+            <div class="field-violations small text-danger mb-1" id="tags-violations-{{ vid }}"></div>
+            <div class="tags-display mb-1" id="tags-display-{{ vid }}">
+              {% for tag in v.get('tags', []) %}
+              <span class="tag-chip">{{ tag }}</span>
+              {% endfor %}
+            </div>
+            <textarea class="form-control form-control-sm font-monospace editable-field"
+                      data-field="tags"
+                      data-variant="{{ vid }}"
+                      id="tags-{{ vid }}"
+                      rows="4"
+                      style="font-size:.78rem;">{{ v.get('tags', []) | join(', ') }}</textarea>
+          </div>
+
+          <!-- Description -->
+          <div class="flex-grow-1">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Description</label>
+              <span class="badge bg-light text-dark border" id="desc-count-{{ vid }}">
+                {{ v.get('description', '').split() | length }} words
+              </span>
+            </div>
+            <div class="field-violations small text-danger mb-1" id="desc-violations-{{ vid }}"></div>
+            <textarea class="form-control form-control-sm editable-field"
+                      data-field="description"
+                      data-variant="{{ vid }}"
+                      id="description-{{ vid }}"
+                      rows="8"
+                      style="font-size:.8rem; resize:vertical;">{{ v.get('description', '') }}</textarea>
+          </div>
+
+        </div><!-- /card-body -->
+
+        <div class="card-footer bg-white border-top py-2">
+          <button type="button"
+                  class="btn btn-sm btn-outline-secondary w-100 open-hybrid-btn"
+                  data-variant-id="{{ vid }}">
+            ✏ Hybrid Edit from this variant
+          </button>
+        </div>
+      </div><!-- /card -->
+    </div><!-- /col -->
+    {% endfor %}
+  </div><!-- /row -->
+
+
+  <!-- ── Shared Fields ──────────────────────────────────────────────────────── -->
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header fw-semibold bg-white border-bottom">
+      Shared Fields <span class="text-muted fw-normal small">(apply to whichever variant you pick)</span>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+
+        <!-- Images -->
+        <div class="col-md-6">
+          <label class="fw-semibold small text-muted text-uppercase mb-2" style="letter-spacing:.05em;">
+            Product Images ({{ images | length }})
+          </label>
+          {% if images %}
+          <div class="d-flex flex-wrap gap-2">
+            {% for img in images[:9] %}
+            <div class="rounded overflow-hidden border" style="width:64px;height:64px;flex-shrink:0;">
+              {% if img.file_path %}
+              {% set fname = img.file_path.split('/')[-1] %}
+              <div class="bg-light d-flex align-items-center justify-content-center w-100 h-100"
+                   style="font-size:.55rem;color:#999;text-align:center;padding:2px;word-break:break-all;">
+                {{ fname[:12] }}…
+              </div>
+              {% else %}
+              <div class="bg-light w-100 h-100"></div>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="text-muted small">No images.</p>
+          {% endif %}
+        </div>
+
+        <!-- Listing options -->
+        <div class="col-md-6">
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label small text-muted mb-1">Price</label>
+              <div class="input-group input-group-sm">
+                <span class="input-group-text">$</span>
+                <input type="text" class="form-control"
+                       value="{% if product.selling_price %}{{ '%.2f' | format(product.selling_price | float) }}{% else %}—{% endif %}"
+                       readonly>
+              </div>
+            </div>
+            <div class="col-6">
+              <label class="form-label small text-muted mb-1">Quantity</label>
+              <input type="text" class="form-control form-control-sm" value="999" readonly>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ── Action Bar ─────────────────────────────────────────────────────────── -->
+  <div class="card border-0 shadow-sm mb-5">
+    <div class="card-body d-flex flex-wrap gap-2 align-items-center">
+
+      <button type="submit" class="btn btn-warning fw-semibold px-4" id="approve-btn">
+        ✅ Approve selected variant
+      </button>
+
+      <button type="button" class="btn btn-outline-secondary"
+              onclick="saveDraft()">
+        💾 Save as draft
+      </button>
+
+      <button type="button" class="btn btn-outline-danger ms-auto"
+              data-bs-toggle="modal" data-bs-target="#rejectModal">
+        ✗ Reject all &amp; regenerate
+      </button>
+
+    </div>
+  </div>
+
+</form><!-- /#approve-form -->
+
+
+<!-- ── Reject Confirmation Modal ─────────────────────────────────────────── -->
+<div class="modal fade" id="rejectModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Reject &amp; Regenerate</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p>This will clear all 3 generated variants and send the product back to
+           <strong>content generation</strong>. You'll need to trigger generation again
+           from the product page.</p>
+        <p class="text-danger mb-0">This action cannot be undone.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <form method="post" action="/approval/{{ product.sku }}/reject">
+          <button type="submit" class="btn btn-danger">Confirm &amp; Reject</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ── Hybrid Edit Modal ──────────────────────────────────────────────────── -->
+<div class="modal fade modal-xl" id="hybridModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-scrollable" style="max-width:1100px;">
+    <div class="modal-content">
+
+      <div class="modal-header">
+        <h5 class="modal-title">Hybrid Edit
+          <span class="badge bg-secondary fw-normal ms-2" id="hybrid-base-label"></span>
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="row g-3">
+
+          <!-- Left: editor -->
+          <div class="col-lg-7">
+            <h6 class="text-muted small text-uppercase fw-semibold mb-3" style="letter-spacing:.06em;">Current Composition</h6>
+
+            <!-- Hybrid Title -->
+            <div class="mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="fw-semibold small">Title</label>
+                <span class="badge bg-light text-dark border" id="hybrid-title-count">0 chars</span>
+              </div>
+              <div class="violations-inline small text-danger mb-1" id="hybrid-title-violations"></div>
+              <textarea class="form-control font-monospace" id="hybrid-title" rows="3"
+                        style="font-size:.85rem;"></textarea>
+              <div class="small text-muted mt-1">
+                <span id="hybrid-title-src" class="badge bg-light text-dark border">source: —</span>
+              </div>
+            </div>
+
+            <!-- Hybrid Tags -->
+            <div class="mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="fw-semibold small">Tags <span class="fw-normal text-muted">(comma-separated)</span></label>
+                <span class="badge bg-light text-dark border" id="hybrid-tags-count">0/13</span>
+              </div>
+              <div class="violations-inline small text-danger mb-1" id="hybrid-tags-violations"></div>
+              <textarea class="form-control font-monospace" id="hybrid-tags" rows="4"
+                        style="font-size:.82rem;"></textarea>
+              <div class="small text-muted mt-1">
+                <span id="hybrid-tags-src" class="badge bg-light text-dark border">source: —</span>
+              </div>
+            </div>
+
+            <!-- Hybrid Description -->
+            <div class="mb-3">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="fw-semibold small">Description</label>
+                <span class="badge bg-light text-dark border" id="hybrid-desc-count">0 words</span>
+              </div>
+              <div class="violations-inline small text-danger mb-1" id="hybrid-desc-violations"></div>
+              <textarea class="form-control" id="hybrid-description" rows="10"
+                        style="font-size:.84rem;"></textarea>
+              <div class="small text-muted mt-1">
+                <span id="hybrid-desc-src" class="badge bg-light text-dark border">source: —</span>
+              </div>
+            </div>
+
+            <!-- Override confirm (shown when violations exist) -->
+            <div class="border border-warning rounded p-3 mb-3 d-none" id="override-confirm-box">
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="hybrid-override-check">
+                <label class="form-check-label small" for="hybrid-override-check">
+                  I know this breaks the rules — proceed anyway and log the override.
+                </label>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Right: other variants sidebar -->
+          <div class="col-lg-5">
+            <h6 class="text-muted small text-uppercase fw-semibold mb-3" style="letter-spacing:.06em;">Pick from other variants</h6>
+            <div id="hybrid-sidebar">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+        </div>
+      </div><!-- /modal-body -->
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-warning fw-semibold" id="hybrid-save-btn"
+                onclick="submitHybrid()">
+          ✅ Approve Hybrid Variant
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div><!-- /#hybridModal -->
+
+<!-- Hidden form for hybrid submission -->
+<form id="hybrid-form" method="post" action="/approval/{{ product.sku }}/hybrid" class="d-none">
+  <input type="hidden" name="title" id="hf-title">
+  <input type="hidden" name="tags_json" id="hf-tags">
+  <input type="hidden" name="description" id="hf-description">
+  <input type="hidden" name="source_angles_json" id="hf-sources">
+  <input type="hidden" name="overrides_json" id="hf-overrides">
+</form>
+
+{% endblock %}
+
+
+{% block extra_scripts %}
+<style>
+  .variant-card { transition: border-color .2s, box-shadow .2s; }
+  .variant-card.selected { border-color: #ffc107 !important; box-shadow: 0 0 0 .2rem rgba(255,193,7,.25); }
+  .editable-field:focus { outline: 2px solid #ffc10780; border-color: #ffc107; }
+  .field-violations:empty { display: none; }
+  .save-indicator { font-size:.7rem; color:#198754; }
+  .save-error { font-size:.7rem; color:#dc3545; }
+  .hybrid-field-row { border-bottom: 1px solid #dee2e6; padding: 8px 0; }
+  .hybrid-field-row:last-child { border-bottom: none; }
+  .use-this-btn { font-size:.72rem; white-space: nowrap; }
+</style>
+
+<script>
+// ── Variant data (injected from server) ──────────────────────────────────────
+const VARIANTS = {{ variants | tojson }};
+const SKU = "{{ product.sku }}";
+
+// source tracking for hybrid: {field: variantId}
+const hybridSources = { title: null, tags: null, description: null };
+
+// ── Radio selection → highlight cards ────────────────────────────────────────
+document.querySelectorAll('.variant-radio').forEach(radio => {
+  radio.addEventListener('change', () => {
+    const vid = radio.value;
+    document.getElementById('selected-variant-input').value = vid;
+
+    document.querySelectorAll('.variant-card').forEach(card => {
+      card.classList.remove('selected', 'shadow');
+      card.classList.add('border-light');
+    });
+    const chosen = document.getElementById('card-' + vid);
+    if (chosen) {
+      chosen.classList.remove('border-light');
+      chosen.classList.add('selected', 'shadow');
+    }
+  });
+});
+
+// Initialise highlight on load
+const initRadio = document.querySelector('.variant-radio:checked');
+if (initRadio) initRadio.dispatchEvent(new Event('change'));
+
+
+// ── Live character / word counts ──────────────────────────────────────────────
+function updateCounts(vid) {
+  const title = document.getElementById('title-' + vid);
+  const tags  = document.getElementById('tags-' + vid);
+  const desc  = document.getElementById('description-' + vid);
+
+  if (title) {
+    const len = title.innerText ? title.innerText.length : title.textContent.length;
+    const el = document.getElementById('title-count-' + vid);
+    if (el) el.textContent = len + ' chars';
+  }
+  if (tags) {
+    const count = tags.value.split(',').filter(t => t.trim()).length;
+    const el = document.getElementById('tags-count-' + vid);
+    if (el) el.textContent = count + '/13';
+    // Rebuild chip display
+    const display = document.getElementById('tags-display-' + vid);
+    if (display) {
+      display.innerHTML = tags.value.split(',').filter(t => t.trim())
+        .map(t => `<span class="tag-chip">${t.trim()}</span>`).join('');
+    }
+  }
+  if (desc) {
+    const wc = desc.value.trim().split(/\s+/).filter(Boolean).length;
+    const el = document.getElementById('desc-count-' + vid);
+    if (el) el.textContent = wc + ' words';
+  }
+}
+
+VARIANTS.forEach(v => updateCounts(v.id));
+
+
+// ── Auto-save on blur (PATCH) ─────────────────────────────────────────────────
+async function autosave(variantId, field, value) {
+  try {
+    const resp = await fetch(`/approval/${SKU}/variant/${variantId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field, value }),
+    });
+    const data = await resp.json();
+    showViolations(variantId, field, data.violations || []);
+    return data;
+  } catch (e) {
+    console.error('autosave error', e);
+  }
+}
+
+function showViolations(variantId, field, violations) {
+  const mapping = { title: 'title', tags: 'tags', description: 'desc' };
+  const prefix = mapping[field] || field;
+  const el = document.getElementById(prefix + '-violations-' + variantId);
+  if (!el) return;
+  if (violations && violations.length > 0) {
+    el.innerHTML = violations.map(v => `⚠ ${v}`).join('<br>');
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+document.querySelectorAll('.editable-field').forEach(el => {
+  const variantId = el.dataset.variant;
+  const field = el.dataset.field;
+
+  // Count updates on input
+  el.addEventListener('input', () => updateCounts(variantId));
+
+  // Auto-save on blur
+  el.addEventListener('blur', async () => {
+    let value;
+    if (el.tagName === 'TEXTAREA') {
+      value = el.value;
+      if (field === 'tags') {
+        value = el.value.split(',').map(t => t.trim()).filter(Boolean);
+      }
+    } else {
+      value = el.innerText || el.textContent;
+    }
+    await autosave(variantId, field, value);
+  });
+});
+
+
+// ── Save as draft ─────────────────────────────────────────────────────────────
+async function saveDraft() {
+  const vid = document.getElementById('selected-variant-input').value;
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = `/approval/${SKU}/draft`;
+  const inp = document.createElement('input');
+  inp.type = 'hidden'; inp.name = 'variant_id'; inp.value = vid;
+  form.appendChild(inp);
+  document.body.appendChild(form);
+  form.submit();
+}
+
+
+// ── Hybrid Edit ───────────────────────────────────────────────────────────────
+let hybridBaseId = null;
+
+document.querySelectorAll('.open-hybrid-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    hybridBaseId = btn.dataset.variantId;
+    openHybridModal(hybridBaseId);
+  });
+});
+
+function openHybridModal(baseId) {
+  const base = VARIANTS.find(v => v.id === baseId);
+  if (!base) return;
+
+  document.getElementById('hybrid-base-label').textContent = 'Based on Variant ' + baseId;
+
+  // Pre-fill editor
+  document.getElementById('hybrid-title').value = base.title || '';
+  document.getElementById('hybrid-tags').value = (base.tags || []).join(', ');
+  document.getElementById('hybrid-description').value = base.description || '';
+
+  hybridSources.title = baseId;
+  hybridSources.tags  = baseId;
+  hybridSources.description = baseId;
+
+  document.getElementById('hybrid-title-src').textContent = 'source: ' + baseId;
+  document.getElementById('hybrid-tags-src').textContent  = 'source: ' + baseId;
+  document.getElementById('hybrid-desc-src').textContent  = 'source: ' + baseId;
+
+  updateHybridCounts();
+  renderHybridSidebar(baseId);
+
+  const modal = new bootstrap.Modal(document.getElementById('hybridModal'));
+  modal.show();
+}
+
+function renderHybridSidebar(baseId) {
+  const others = VARIANTS.filter(v => v.id !== baseId);
+  const sidebar = document.getElementById('hybrid-sidebar');
+  sidebar.innerHTML = '';
+
+  others.forEach(v => {
+    const section = document.createElement('div');
+    section.className = 'card border-0 shadow-sm mb-3';
+    section.innerHTML = `
+      <div class="card-header bg-white py-2 fw-semibold small">Variant ${v.id}
+        <span class="text-muted fw-normal ms-1">${v.strategy_label || ''}</span>
+      </div>
+      <div class="card-body p-2">
+
+        <div class="hybrid-field-row">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div class="small text-muted" style="flex:1;min-width:0;">
+              <strong class="d-block text-dark mb-1">Title</strong>
+              <span class="d-block text-truncate" style="max-width:220px;">${escHtml(v.title || '')}</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary use-this-btn"
+                    onclick="useField('${v.id}', 'title', ${JSON.stringify(v.title || '')})">
+              ← Use this
+            </button>
+          </div>
+        </div>
+
+        <div class="hybrid-field-row">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div class="small text-muted" style="flex:1;min-width:0;">
+              <strong class="d-block text-dark mb-1">Tags (${(v.tags || []).length})</strong>
+              <span class="d-block" style="font-size:.75rem;">${(v.tags || []).slice(0,3).join(', ')}…</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary use-this-btn"
+                    onclick='useField("${v.id}", "tags", ${JSON.stringify(v.tags || [])})'>
+              ← Use this
+            </button>
+          </div>
+        </div>
+
+        <div class="hybrid-field-row">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div class="small text-muted" style="flex:1;min-width:0;">
+              <strong class="d-block text-dark mb-1">Description (${(v.description || '').split(' ').length} words)</strong>
+              <span class="d-block" style="font-size:.75rem;">${escHtml((v.description || '').substring(0, 80))}…</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-primary use-this-btn"
+                    onclick='useField("${v.id}", "description", ${JSON.stringify(v.description || '')})'>
+              ← Use this
+            </button>
+          </div>
+        </div>
+
+      </div>
+    `;
+    sidebar.appendChild(section);
+  });
+}
+
+function useField(sourceVariantId, field, value) {
+  if (field === 'title') {
+    document.getElementById('hybrid-title').value = value;
+    document.getElementById('hybrid-title-src').textContent = 'source: ' + sourceVariantId;
+    hybridSources.title = sourceVariantId;
+  } else if (field === 'tags') {
+    const tagStr = Array.isArray(value) ? value.join(', ') : value;
+    document.getElementById('hybrid-tags').value = tagStr;
+    document.getElementById('hybrid-tags-src').textContent = 'source: ' + sourceVariantId;
+    hybridSources.tags = sourceVariantId;
+  } else if (field === 'description') {
+    document.getElementById('hybrid-description').value = value;
+    document.getElementById('hybrid-desc-src').textContent = 'source: ' + sourceVariantId;
+    hybridSources.description = sourceVariantId;
+  }
+  updateHybridCounts();
+  validateHybridFields();
+}
+
+function updateHybridCounts() {
+  const title = document.getElementById('hybrid-title').value;
+  const tags  = document.getElementById('hybrid-tags').value;
+  const desc  = document.getElementById('hybrid-description').value;
+
+  document.getElementById('hybrid-title-count').textContent = title.length + ' chars';
+  const tagCount = tags.split(',').filter(t => t.trim()).length;
+  document.getElementById('hybrid-tags-count').textContent = tagCount + '/13';
+  const wc = desc.trim().split(/\s+/).filter(Boolean).length;
+  document.getElementById('hybrid-desc-count').textContent = wc + ' words';
+}
+
+['hybrid-title', 'hybrid-tags', 'hybrid-description'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    updateHybridCounts();
+    validateHybridFields();
+  });
+});
+
+async function validateHybridFields() {
+  const fields = [
+    { field: 'title', val: document.getElementById('hybrid-title').value, elId: 'hybrid-title-violations' },
+    { field: 'tags',  val: document.getElementById('hybrid-tags').value,  elId: 'hybrid-tags-violations' },
+    { field: 'description', val: document.getElementById('hybrid-description').value, elId: 'hybrid-desc-violations' },
+  ];
+
+  let hasViolations = false;
+
+  for (const { field, val, elId } of fields) {
+    try {
+      const resp = await fetch(`/approval/${SKU}/validate-field`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, value: field === 'tags'
+          ? val.split(',').map(t => t.trim()).filter(Boolean)
+          : val }),
+      });
+      const data = await resp.json();
+      const el = document.getElementById(elId);
+      if (data.violations && data.violations.length > 0) {
+        el.innerHTML = data.violations.map(v => `⚠ ${v}`).join('<br>');
+        hasViolations = true;
+      } else {
+        el.innerHTML = '';
+      }
+    } catch (_) {}
+  }
+
+  const box = document.getElementById('override-confirm-box');
+  if (hasViolations) {
+    box.classList.remove('d-none');
+  } else {
+    box.classList.add('d-none');
+  }
+}
+
+async function submitHybrid() {
+  const title = document.getElementById('hybrid-title').value;
+  const tagsRaw = document.getElementById('hybrid-tags').value;
+  const tags = tagsRaw.split(',').map(t => t.trim()).filter(Boolean);
+  const description = document.getElementById('hybrid-description').value;
+
+  // Check for unconfirmed violations
+  const box = document.getElementById('override-confirm-box');
+  if (!box.classList.contains('d-none')) {
+    const confirmed = document.getElementById('hybrid-override-check').checked;
+    if (!confirmed) {
+      alert('Please confirm the override checkbox to proceed with rule violations.');
+      return;
+    }
+  }
+
+  // Collect override details from violation elements
+  const overrides = [];
+  [
+    { field: 'title', elId: 'hybrid-title-violations', value: title },
+    { field: 'tags',  elId: 'hybrid-tags-violations',  value: JSON.stringify(tags) },
+    { field: 'description', elId: 'hybrid-desc-violations', value: description },
+  ].forEach(({ field, elId, value }) => {
+    const el = document.getElementById(elId);
+    if (el && el.textContent.trim()) {
+      overrides.push({ field, violation: el.textContent.trim(), value });
+    }
+  });
+
+  document.getElementById('hf-title').value = title;
+  document.getElementById('hf-tags').value = JSON.stringify(tags);
+  document.getElementById('hf-description').value = description;
+  document.getElementById('hf-sources').value = JSON.stringify(hybridSources);
+  document.getElementById('hf-overrides').value = JSON.stringify(overrides);
+
+  document.getElementById('hybrid-form').submit();
+}
+
+// ── Override confirm on main approve form ─────────────────────────────────────
+document.getElementById('approve-form').addEventListener('submit', function(e) {
+  const violations = document.querySelectorAll('.field-violations:not(:empty)');
+  if (violations.length > 0) {
+    // Collect violations for overrides_json
+    const overrides = [];
+    violations.forEach(el => {
+      // Parse variant and field from element id: "{field}-violations-{vid}"
+      const parts = el.id.split('-');
+      const vid = parts[parts.length - 1];
+      const field = parts[0];
+      overrides.push({ field, violation: el.textContent.trim(), value: '' });
+    });
+    document.getElementById('overrides-json-input').value = JSON.stringify(overrides);
+  }
+});
+
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+</script>
+{% endblock %}

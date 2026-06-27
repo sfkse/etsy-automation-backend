@@ -80,6 +80,7 @@ class Product(Base):
 
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
+    approval_overrides = relationship("ApprovalOverride", back_populates="product")
 
 
 class ProductImage(Base):
@@ -98,6 +99,21 @@ class ProductImage(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product", back_populates="images")
+
+
+class ApprovalOverride(Base):
+    """Audit log of human overrides to validator violations during approval."""
+
+    __tablename__ = "approval_overrides"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    field_name = Column(String(50), nullable=False)   # "title" | "tags" | "description"
+    violation = Column(Text, nullable=False)          # the rule that was violated
+    overridden_value = Column(Text)                   # the value user forced through
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="approval_overrides")
 
 
 class KeywordPool(Base):
