@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Import Keywords — Etsy Automation{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <a href="/admin/keywords" class="text-muted text-decoration-none small">← Keyword Pool</a>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+
+    <h2 class="mb-1">Import Keyword Pool</h2>
+    <p class="text-muted mb-4">Upload a CSV file to bulk-import or update keywords. Existing keywords are updated in place; new ones are inserted.</p>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if success %}
+    <div class="alert alert-success">
+      {{ success }}
+      <a href="/admin/keywords" class="alert-link ms-2">View keywords →</a>
+    </div>
+    {% endif %}
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">CSV Format</div>
+      <div class="card-body">
+        <p class="mb-2 small text-muted">Required columns (header row mandatory):</p>
+        <code>keyword, category, carrier_pillar</code>
+        <hr class="my-3">
+        <p class="mb-1 small fw-semibold">Column values:</p>
+        <ul class="small mb-0">
+          <li><strong>keyword</strong> — the search phrase (e.g. <code>gold cross necklace</code>)</li>
+          <li><strong>category</strong> — one of: <code>niche</code>, <code>medium</code>, <code>big</code></li>
+          <li><strong>carrier_pillar</strong> — one of:
+            {% for p in pillar_options %}<code>{{ p }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white border-bottom">Example CSV</div>
+      <div class="card-body">
+        <pre class="mb-0 small bg-light p-3 rounded">keyword,category,carrier_pillar
+gold cross necklace,big,cross
+tiny cross pendant,niche,cross
+christian jewelry gift,medium,cross
+birthstone necklace,big,birthstone
+personalized birthstone,niche,birthstone</pre>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header fw-semibold bg-white border-bottom">Upload CSV</div>
+      <div class="card-body">
+        <form method="post" action="/admin/keywords/import" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label for="csv_file" class="form-label">CSV File</label>
+            <input type="file" class="form-control" id="csv_file" name="csv_file" accept=".csv" required>
+          </div>
+          <button type="submit" class="btn btn-success px-4">Import Keywords</button>
+        </form>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

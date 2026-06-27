@@ -38,6 +38,13 @@
         ▶ Process Product
       </button>
     </form>
+    <form method="post" action="/products/{{ product.sku }}/generate-comparison"
+          id="compForm" class="d-flex align-items-center gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm"
+              onclick="runComparison()">
+        ⚖ Compare Workflows
+      </button>
+    </form>
 
     {% elif product.status in ('image_processing', 'content_generating') %}
     <a href="/products/{{ product.sku }}/progress" class="btn btn-info text-white">
@@ -45,9 +52,17 @@
     </a>
 
     {% elif product.status == 'awaiting_approval' %}
+    {% if not product.generated_variants %}
+    <form method="post" action="/products/{{ product.sku }}/generate-content">
+      <button type="submit" class="btn btn-primary px-4">
+        ✦ Generate Content
+      </button>
+    </form>
+    {% else %}
     <a href="/approval/{{ product.sku }}" class="btn btn-warning">
       ✅ Review &amp; Approve
     </a>
+    {% endif %}
 
     {% elif product.status == 'published' %}
     {% if product.etsy_listing_id %}
@@ -255,9 +270,38 @@
           {% endif %}
         </dl>
       </div>
+      {% if product.status == 'manual_input' %}
+      <div class="card-footer bg-white border-top">
+        <a href="/products/{{ product.sku }}/comparison" class="btn btn-outline-secondary btn-sm w-100">
+          View Comparison
+        </a>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+async function runComparison() {
+  const btn = document.querySelector('[onclick="runComparison()"]');
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  try {
+    const resp = await fetch('/products/{{ product.sku }}/generate-comparison', {method: 'POST'});
+    if (resp.ok) {
+      window.location.href = '/products/{{ product.sku }}/comparison';
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    btn.textContent = '✗ Error';
+    btn.disabled = false;
+  }
+}
+</script>
 {% endblock %}

@@ -33,3 +33,6 @@ class Settings(BaseSettings):
 
     # Phase 3 — Research
     REQUIRE_RESEARCH_FOR_GENERATION: bool = False
+
+    # Phase 6 — Content LLM (Sonnet for quality; Haiku used by research analyzers)
+    CONTENT_LLM_MODEL: str = "claude-sonnet-4-5"

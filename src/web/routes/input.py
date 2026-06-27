@@ -11,7 +11,9 @@ GET  /products/{sku}/status  — JSON status endpoint for JS polling
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+import asyncio
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -20,6 +22,8 @@ from src.config.settings import Settings
 from src.db.dependencies import get_session
 from src.db.models import Product, ProductImage, ProductStatus
 from src.domain.carrier_pillar import CarrierPillar
+from src.modules.images.comparison import run_comparison
+from src.modules.images.pipeline import run_image_pipeline
 from src.modules.input import generate_sku, save_product_images
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -253,11 +257,12 @@ async def product_detail(
     )
 
 
-# ── Process Product (stub — real pipeline wired in Phase 5) ───────────────────
+# ── Process Product ────────────────────────────────────────────────────────────
 
 @router.post("/{sku}/process")
 async def process_product(
     sku: str,
+    background_tasks: BackgroundTasks,
     workflow: str = Form(_settings.DEFAULT_IMAGE_WORKFLOW),
     session: Session = Depends(get_session),
 ):
@@ -265,14 +270,28 @@ async def process_product(
     if product is None:
         return RedirectResponse(url="/products", status_code=303)
 
-    # Record chosen workflow and advance status so progress page shows correctly
     product.image_workflow_used = workflow
     product.status = ProductStatus.IMAGE_PROCESSING.value
     session.commit()
 
-    # TODO Phase 5: enqueue actual image pipeline here
+    background_tasks.add_task(_run_pipeline_bg, sku, workflow)
 
     return RedirectResponse(url=f"/products/{sku}/progress", status_code=303)
+
+
+async def _run_pipeline_bg(sku: str, workflow: str) -> None:
+    """Background task: run image pipeline and handle failures gracefully."""
+    from src.db.session import SessionLocal
+
+    with SessionLocal() as bg_session:
+        product = bg_session.query(Product).filter_by(sku=sku).first()
+        if product is None:
+            return
+        try:
+            await run_image_pipeline(product, bg_session, _settings)
+        except Exception:
+            product.status = ProductStatus.FAILED.value
+            bg_session.commit()
 
 
 # ── Progress Polling Page ──────────────────────────────────────────────────────
@@ -295,6 +314,83 @@ async def product_progress(
             "status_badge_class": STATUS_BADGE_CLASS,
         },
     )
+
+
+# ── Comparison Workflow ────────────────────────────────────────────────────────
+
+@router.post("/{sku}/generate-comparison")
+async def generate_comparison(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """Run all 3 AI workflows on the same prompt and redirect to comparison view."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    results = await run_comparison(product, session, _settings)
+    comparison_data = [
+        {
+            "workflow": r.workflow_name,
+            "file_path": r.file_path,
+            "elapsed_seconds": r.elapsed_seconds,
+            "cost_estimate": r.cost_estimate,
+            "success": r.success,
+            "error": r.error,
+        }
+        for r in results
+    ]
+    return JSONResponse({"sku": sku, "results": comparison_data})
+
+
+@router.get("/{sku}/comparison", response_class=HTMLResponse)
+async def comparison_page(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Show comparison UI for the 3 AI workflow outputs."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/products", status_code=303)
+
+    from pathlib import Path as _Path
+
+    comp_dir = _Path(_settings.IMAGES_DIR) / sku / "comparison"
+    workflow_results = []
+    for wf in ["gemini", "openai", "flux"]:
+        img_path = comp_dir / f"{wf}.png"
+        workflow_results.append({
+            "workflow": wf,
+            "exists": img_path.exists(),
+            "url": f"/images/{sku}/comparison/{wf}.png" if img_path.exists() else None,
+        })
+
+    return _tmpl(
+        "products/comparison.html", request,
+        {
+            "product": product,
+            "workflow_results": workflow_results,
+            "status_labels": STATUS_LABELS,
+            "status_badge_class": STATUS_BADGE_CLASS,
+        },
+    )
+
+
+@router.post("/{sku}/select-workflow")
+async def select_workflow(
+    sku: str,
+    workflow: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    """Save the user's preferred workflow selection for this product."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/products", status_code=303)
+
+    product.image_workflow_used = workflow
+    session.commit()
+    return RedirectResponse(url=f"/products/{sku}", status_code=303)
 
 
 # ── Status JSON (for JS polling) ───────────────────────────────────────────────

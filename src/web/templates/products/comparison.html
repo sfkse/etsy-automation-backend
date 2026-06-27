@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Workflow Comparison — {{ product.sku }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/products/{{ product.sku }}" class="text-muted text-decoration-none small">← {{ product.sku }}</a>
+</div>
+
+<h2 class="mb-1">Workflow Comparison</h2>
+<p class="text-muted mb-4">
+  Same prompt run through all three AI models. Pick the best result to use for full generation.
+</p>
+
+{% if not workflow_results or not workflow_results | selectattr("exists") | list %}
+<div class="alert alert-warning">
+  No comparison images yet.
+  <a href="/products/{{ product.sku }}" class="alert-link">Go back</a> and click
+  <strong>Generate Comparison</strong> first.
+</div>
+{% else %}
+
+<div class="row g-4 mb-4">
+  {% for wf in workflow_results %}
+  <div class="col-md-4">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header fw-semibold bg-white border-bottom d-flex align-items-center justify-content-between">
+        <span>{{ wf.workflow | title }}</span>
+        {% if wf.exists %}
+        <span class="badge bg-success">Ready</span>
+        {% else %}
+        <span class="badge bg-secondary">Not generated</span>
+        {% endif %}
+      </div>
+      <div class="card-body p-0">
+        {% if wf.exists and wf.url %}
+        <img src="{{ wf.url }}" alt="{{ wf.workflow }} output" class="img-fluid w-100"
+             style="aspect-ratio:1; object-fit:cover;">
+        {% else %}
+        <div class="d-flex align-items-center justify-content-center bg-light text-muted"
+             style="aspect-ratio:1; font-size:.85rem;">
+          No image
+        </div>
+        {% endif %}
+      </div>
+      {% if wf.exists %}
+      <div class="card-footer bg-white border-top">
+        <form method="post" action="/products/{{ product.sku }}/select-workflow">
+          <input type="hidden" name="workflow" value="{{ wf.workflow }}">
+          <button type="submit"
+                  class="btn btn-sm w-100 {% if product.image_workflow_used == wf.workflow %}btn-success{% else %}btn-outline-primary{% endif %}">
+            {% if product.image_workflow_used == wf.workflow %}
+            ✓ Selected
+            {% else %}
+            Select {{ wf.workflow | title }}
+            {% endif %}
+          </button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if product.image_workflow_used %}
+<div class="alert alert-success d-flex align-items-center gap-3">
+  <span>
+    Selected workflow: <strong>{{ product.image_workflow_used | title }}</strong>.
+    Ready to generate the full set of lifestyle images.
+  </span>
+  <form method="post" action="/products/{{ product.sku }}/process" class="ms-auto">
+    <input type="hidden" name="workflow" value="{{ product.image_workflow_used }}">
+    <button type="submit" class="btn btn-success">▶ Generate Full Set</button>
+  </form>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

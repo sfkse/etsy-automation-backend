@@ -121,6 +121,25 @@ class ResearchContextBuilder:
     def __init__(self, session: Session):
         self.session = session
 
+    def current_snapshot_id(self, pillar: str | CarrierPillar) -> str:
+        """
+        Return a snapshot identifier string for the research data used in generation.
+        Based on the most recent ``last_analyzed_at`` timestamp of the relevant
+        KeywordResearch rows. Returns ``"no-research"`` when no data exists.
+        """
+        pillar_str = pillar.value if isinstance(pillar, CarrierPillar) else str(pillar)
+        keywords = _pillar_to_keywords(pillar_str)
+        rows = (
+            self.session.query(KeywordResearch.last_analyzed_at)
+            .filter(KeywordResearch.keyword.in_(keywords))
+            .all()
+        )
+        timestamps = [r[0] for r in rows if r[0] is not None]
+        if not timestamps:
+            return "no-research"
+        latest = max(timestamps)
+        return latest.strftime("%Y%m%d-%H%M%S")
+
     def build_for_keywords(self, keywords: list[str]) -> ResearchContext:
         if not keywords:
             return ResearchContext.empty()
