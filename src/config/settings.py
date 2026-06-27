@@ -30,3 +30,6 @@ class Settings(BaseSettings):
     # App
     LOG_LEVEL: str = "INFO"
     DEFAULT_IMAGE_WORKFLOW: Literal["gemini", "openai", "flux"] = "gemini"
+
+    # Phase 3 — Research
+    REQUIRE_RESEARCH_FOR_GENERATION: bool = False

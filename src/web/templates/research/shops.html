@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Competitor Shops{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h2 class="mb-0">Competitor Shops</h2>
+    <p class="text-muted mb-0">{{ shops | length }} shop{{ 's' if shops | length != 1 }} tracked</p>
+  </div>
+  <a href="/research" class="btn btn-outline-secondary">← Research</a>
+</div>
+
+{% set classification_colors = {
+  'rising':        'success',
+  'active_strong': 'primary',
+  'legacy':        'secondary',
+  'unknown':       'light'
+} %}
+
+{% if shops %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover align-middle mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Shop</th>
+          <th>Classification</th>
+          <th class="text-end">Total Sales</th>
+          <th class="text-end">Listings</th>
+          <th class="text-end">Bestsellers</th>
+          <th class="text-end">Avg Rating</th>
+          <th>First Seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for shop in shops %}
+        {% set cls = shop.classification or 'unknown' %}
+        {% set color = classification_colors.get(cls, 'light') %}
+        <tr>
+          <td>
+            {% if shop.shop_url %}
+            <a href="{{ shop.shop_url }}" target="_blank" rel="noopener" class="text-decoration-none fw-semibold">
+              {{ shop.shop_name or shop.shop_id }}
+            </a>
+            {% else %}
+            <span class="fw-semibold">{{ shop.shop_name or shop.shop_id }}</span>
+            {% endif %}
+            <div class="text-muted" style="font-size:.75rem">{{ shop.shop_id }}</div>
+          </td>
+          <td>
+            <span class="badge bg-{{ color }}{% if color == 'light' %} text-dark{% endif %}">
+              {{ classification_labels.get(cls, cls) }}
+            </span>
+          </td>
+          <td class="text-end">{{ '{:,}'.format(shop.total_sales) if shop.total_sales else '—' }}</td>
+          <td class="text-end">{{ shop.listings_in_research or '—' }}</td>
+          <td class="text-end">{{ shop.bestseller_listings or '—' }}</td>
+          <td class="text-end">{{ shop.avg_rating | round(2) if shop.avg_rating else '—' }}</td>
+          <td style="font-size:.8rem">{{ shop.first_seen_at.strftime('%Y-%m-%d') if shop.first_seen_at else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row g-3 mt-3">
+  <div class="col-auto">
+    <div class="badge bg-success fs-6 px-3 py-2">RISING</div>
+    <p class="text-muted mt-1 mb-0" style="font-size:.8rem">≤24 months old, ≥1000 sales — model-after targets</p>
+  </div>
+  <div class="col-auto">
+    <div class="badge bg-primary fs-6 px-3 py-2">ACTIVE STRONG</div>
+    <p class="text-muted mt-1 mb-0" style="font-size:.8rem">Established, still selling well (weekly ≥30)</p>
+  </div>
+  <div class="col-auto">
+    <div class="badge bg-secondary fs-6 px-3 py-2">LEGACY</div>
+    <p class="text-muted mt-1 mb-0" style="font-size:.8rem">Big catalog, current activity has softened</p>
+  </div>
+</div>
+{% else %}
+<div class="text-center py-5">
+  <h4 class="text-muted">No shops tracked yet</h4>
+  <p class="text-muted">Shops are populated automatically when you import a CSV.</p>
+  <a href="/research/import" class="btn btn-primary">Import CSV</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Research — Keywords{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h2 class="mb-0">Competitor Research</h2>
+    <p class="text-muted mb-0">{{ keywords | length }} keyword{{ 's' if keywords | length != 1 }} analyzed</p>
+  </div>
+  <a href="/research/import" class="btn btn-primary">+ Import CSV</a>
+</div>
+
+{% if keywords %}
+<div class="row g-3 mb-5">
+  {% for kw in keywords %}
+  <div class="col-sm-6 col-md-4 col-xl-3">
+    <a href="/research/{{ kw.keyword | urlencode }}" class="text-decoration-none">
+      <div class="card h-100 border-0 shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title text-dark">{{ kw.keyword }}</h5>
+          <div class="d-flex gap-3 text-muted" style="font-size:.85rem">
+            <span>📊 {{ kw.total_listings_scraped or 0 }} listings</span>
+            <span>⭐ {{ kw.bestseller_count or 0 }} bestsellers</span>
+          </div>
+          {% if kw.avg_title_length %}
+          <div class="text-muted mt-1" style="font-size:.8rem">Avg title: {{ kw.avg_title_length | round(0) | int }} chars</div>
+          {% endif %}
+          {% if kw.last_analyzed_at %}
+          <div class="text-muted mt-1" style="font-size:.75rem">Analyzed {{ kw.last_analyzed_at.strftime('%Y-%m-%d') }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if unanalyzed %}
+<div class="card border-warning mb-4">
+  <div class="card-header text-warning fw-semibold">Keywords with data but not yet analyzed</div>
+  <div class="card-body">
+    {% for kw in unanalyzed %}
+    <a href="/research/{{ kw | urlencode }}/refresh" class="badge bg-warning text-dark text-decoration-none me-1 mb-1">{{ kw }} (analyze)</a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if not keywords and not unanalyzed %}
+<div class="text-center py-5">
+  <h4 class="text-muted">No research data yet</h4>
+  <p class="text-muted">Import a CSV from the Chrome Extension to get started.</p>
+  <a href="/research/import" class="btn btn-primary">Import CSV</a>
+</div>
+{% endif %}
+{% endblock %}

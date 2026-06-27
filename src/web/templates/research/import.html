@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Import Research CSV{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-6">
+    <h2 class="mb-1">Import Competitor Research CSV</h2>
+    <p class="text-muted mb-4">Export from the Chrome Extension (v2.4+) and upload here. Duplicates are skipped automatically.</p>
+
+    {% if error %}
+    <div class="alert alert-danger">{{ error }}</div>
+    {% endif %}
+
+    {% if result %}
+    <div class="alert alert-success">
+      <h5 class="alert-heading">Import complete — <em>{{ result.filename }}</em></h5>
+      <ul class="mb-1">
+        <li><strong>{{ result.added }}</strong> rows added</li>
+        <li><strong>{{ result.updated }}</strong> rows updated (richer Phase 2 data)</li>
+        <li><strong>{{ result.skipped }}</strong> rows skipped (already imported)</li>
+      </ul>
+      {% if result.keywords_refreshed %}
+      <hr>
+      <p class="mb-0">Analyzer refreshed for:
+        {% for kw in result.keywords_refreshed %}
+          <a href="/research/{{ kw | urlencode }}" class="badge bg-primary text-decoration-none me-1">{{ kw }}</a>
+        {% endfor %}
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">CSV file</label>
+            <input type="file" name="file" accept=".csv" class="form-control" required>
+            <div class="form-text">UTF-8 or UTF-8-BOM encoded CSV exported from the extension.</div>
+          </div>
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" name="refresh_analyzers" value="true" id="refreshCheck" checked>
+            <label class="form-check-label" for="refreshCheck">
+              Re-run analyzers after import (title patterns, tags, clichés)
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
+          <a href="/research" class="btn btn-outline-secondary ms-2">Back to Research</a>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mt-4">
+      <div class="card-header fw-semibold">Expected CSV columns (extension v2.4)</div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-striped mb-0" style="font-size:.8rem">
+          <thead><tr><th>Column</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>listing_id</td><td>Primary key — required</td></tr>
+            <tr><td>keyword</td><td>Searched keyword</td></tr>
+            <tr><td>rank</td><td>Position in search results</td></tr>
+            <tr><td>title / detail_title</td><td>Listing title</td></tr>
+            <tr><td>price_cents</td><td>Integer price in cents</td></tr>
+            <tr><td>is_bestseller / detail_is_bestseller</td><td>Boolean — ORed</td></tr>
+            <tr><td>eh_sales_total / eh_sales_recent</td><td><strong>EHunt Phase 1</strong> — ground-truth sales</td></tr>
+            <tr><td>detail_tags</td><td><strong>EHunt</strong> actual 13 seller tags (pipe-separated)</td></tr>
+            <tr><td>detail_tag_volumes</td><td><strong>EHunt</strong> JSON {tag: volume}</td></tr>
+            <tr><td>eh_detail_*</td><td><strong>EHunt detail panel</strong> — release date, sales, etc.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
