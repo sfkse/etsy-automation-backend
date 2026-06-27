@@ -40,6 +40,7 @@ from src.modules.content.orchestrator import VariantBundleOrchestrator
 from src.modules.content.tag_generator import TagGenerator
 from src.modules.content.title_generator import TitleGenerator
 from src.modules.research.context_builder import ResearchContextBuilder
+from src.modules.sheets.sync import upsert_product_row
 from src.utils.llm_client import get_content_llm_client
 
 _log = structlog.get_logger(__name__)
@@ -94,12 +95,14 @@ async def _run_content_pipeline(product_sku: str) -> None:
             _log.exception("content_pipeline_failed", sku=product_sku, error=str(exc))
             product.status = ProductStatus.FAILED.value
             session.commit()
+            upsert_product_row(product, _settings)
             return
 
         # Store bundle as list of variant dicts in the JSONB column
         product.generated_variants = [v.to_dict() for v in bundle.variants]
         product.status = ProductStatus.AWAITING_APPROVAL.value
         session.commit()
+        upsert_product_row(product, _settings)
         _log.info("content_pipeline_complete", sku=product_sku, variants=len(bundle.variants))
 
     finally:
@@ -133,6 +136,7 @@ async def trigger_content_generation(
 
     product.status = ProductStatus.CONTENT_GENERATING.value
     session.commit()
+    upsert_product_row(product, _settings)
 
     background_tasks.add_task(_run_content_pipeline, sku)
     return RedirectResponse(url=f"/products/{sku}/progress", status_code=303)

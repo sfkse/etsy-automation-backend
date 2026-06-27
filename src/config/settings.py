@@ -42,3 +42,8 @@ class Settings(BaseSettings):
 
     # Phase 6 — Content LLM (Sonnet for quality; Haiku used by research analyzers)
     CONTENT_LLM_MODEL: str = "claude-sonnet-4-5"
+
+    # Phase 10 — Google Sheets sync
+    GOOGLE_SHEETS_ENABLED: bool = False
+    GOOGLE_SERVICE_ACCOUNT_FILE: str = ""  # path to service-account JSON key file
+    GOOGLE_SHEETS_ID: str = ""             # spreadsheet ID from the URL

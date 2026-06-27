@@ -26,6 +26,7 @@ from src.modules.images.alt_text import generate_alt_text
 from src.modules.images.base import ImageGenerationRequest, ImageGenerationResult
 from src.modules.images.factory import ImageWorkflowFactory
 from src.modules.images.preprocessing import preprocess_and_save
+from src.modules.sheets.sync import upsert_product_row
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -158,4 +159,5 @@ async def run_image_pipeline(
     # ── 4. Advance status ─────────────────────────────────────────────────────
     product.status = ProductStatus.AWAITING_APPROVAL.value
     session.commit()
+    upsert_product_row(product, settings)
     logger.info("image_pipeline_done", sku=sku, total_cost=total_cost)

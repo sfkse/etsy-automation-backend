@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 
 from src.config.business_rules import RENEW_HOURS_TR
-from src.modules.scheduler.jobs import renew_job, research_refresh_job, stats_sync_job
+from src.modules.scheduler.jobs import renew_job, research_refresh_job, sheets_sync_job, stats_sync_job
 
 _log = structlog.get_logger(__name__)
 
@@ -29,6 +29,7 @@ def create_scheduler(
     session_factory: Callable[[], Session],
     llm_client=None,
     renew_limit: int = 10,
+    settings=None,
 ) -> AsyncIOScheduler:
     """Build and configure the AsyncIOScheduler.
 
@@ -83,6 +84,18 @@ def create_scheduler(
             misfire_grace_time=7200,
         )
 
+    # ── 10.1  Google Sheets sync every 15 minutes ──────────────────────────────
+    if settings is not None and getattr(settings, "GOOGLE_SHEETS_ENABLED", False):
+        scheduler.add_job(
+            _run_sheets_sync,
+            trigger=CronTrigger(minute="*/15", timezone=TR_TZ),
+            id="sheets_sync",
+            name="Google Sheets sync (every 15 min)",
+            kwargs={"session_factory": session_factory, "settings": settings},
+            replace_existing=True,
+            misfire_grace_time=300,
+        )
+
     _log.info(
         "scheduler_configured",
         jobs=[j.id for j in scheduler.get_jobs()],
@@ -105,3 +118,7 @@ async def _run_renew(etsy_client, session_factory, limit: int) -> None:
 
 async def _run_research_refresh(session_factory, llm_client) -> None:
     await research_refresh_job(session_factory, llm_client)
+
+
+async def _run_sheets_sync(session_factory, settings) -> None:
+    await sheets_sync_job(session_factory, settings)

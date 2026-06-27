@@ -17,8 +17,12 @@ from typing import Any
 import structlog
 from sqlalchemy.orm import Session
 
+from src.config.settings import Settings
 from src.db.models import ApprovalOverride, Product, ProductStatus
 from src.domain.validators import validate_tags, validate_title
+from src.modules.sheets.sync import upsert_product_row
+
+_settings = Settings()
 
 _log = structlog.get_logger(__name__)
 
@@ -120,6 +124,7 @@ def approve_variant(
             ))
 
     session.commit()
+    upsert_product_row(product, _settings)
     _log.info("product_approved", sku=product.sku, variant=variant_id)
     return True
 
@@ -174,6 +179,7 @@ def approve_hybrid_variant(
             ))
 
     session.commit()
+    upsert_product_row(product, _settings)
     _log.info("product_hybrid_approved", sku=product.sku)
 
 
@@ -194,6 +200,7 @@ def reject_and_regenerate(session: Session, product: Product) -> None:
     product.final_description = None
     product.status = ProductStatus.AWAITING_APPROVAL.value
     session.commit()
+    upsert_product_row(product, _settings)
     _log.info("product_rejected_for_regen", sku=product.sku)
 
 

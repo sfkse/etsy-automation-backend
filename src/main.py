@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
         etsy_client=etsy_client,
         session_factory=SessionLocal,
         llm_client=llm_client,
+        settings=_settings,
     )
     scheduler.start()
 

@@ -1,10 +1,11 @@
 """
-Scheduled job implementations for Phase 9.
+Scheduled job implementations for Phase 9 and Phase 10.
 
 jobs:
   stats_sync_job        — daily 06:00 TR: fetch Etsy listing stats → product_stats
   renew_job             — 17:00 / 21:00 / 02:00 / 05:00 TR: renew top performers
   research_refresh_job  — weekly Mon 03:00 TR: re-analyze all keywords
+  sheets_sync_job       — every 15 min: sync editable Sheets fields back to DB
 """
 from __future__ import annotations
 
@@ -23,6 +24,20 @@ _log = structlog.get_logger(__name__)
 
 # How many top performers to renew per slot
 RENEW_LIMIT_DEFAULT: int = 10
+
+
+# ── 10.1 Google Sheets sync ───────────────────────────────────────────────────
+
+async def sheets_sync_job(
+    session_factory: Callable[[], Session],
+    settings,
+) -> None:
+    """Pull Sheets → DB: update editable manual-input fields every 15 minutes."""
+    from src.modules.sheets.sync import sync_sheets_to_db
+
+    _log.info("sheets_sync_job started")
+    summary = sync_sheets_to_db(session_factory=session_factory, settings=settings)
+    _log.info("sheets_sync_job complete", **summary)
 
 
 # ── 9.1 Stats sync ────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ from src.domain.carrier_pillar import CarrierPillar
 from src.modules.images.comparison import run_comparison
 from src.modules.images.pipeline import run_image_pipeline
 from src.modules.input import generate_sku, save_product_images
+from src.modules.sheets.sync import upsert_product_row
 
 router = APIRouter(prefix="/products", tags=["products"])
 templates: Jinja2Templates | None = None
@@ -212,6 +213,7 @@ async def create_product(
         ))
 
     session.commit()
+    upsert_product_row(product, _settings)
     return RedirectResponse(url=f"/products/{sku}", status_code=303)
 
 
@@ -273,6 +275,7 @@ async def process_product(
     product.image_workflow_used = workflow
     product.status = ProductStatus.IMAGE_PROCESSING.value
     session.commit()
+    upsert_product_row(product, _settings)
 
     background_tasks.add_task(_run_pipeline_bg, sku, workflow)
 
@@ -292,6 +295,7 @@ async def _run_pipeline_bg(sku: str, workflow: str) -> None:
         except Exception:
             product.status = ProductStatus.FAILED.value
             bg_session.commit()
+            upsert_product_row(product, _settings)
 
 
 # ── Progress Polling Page ──────────────────────────────────────────────────────

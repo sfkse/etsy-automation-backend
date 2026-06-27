@@ -19,6 +19,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from src.config.business_rules import QUANTITY_CONFIDENT
+from src.config.settings import Settings
 from src.db.models import Product, ProductImage, ProductStatus
 from src.modules.etsy.attributes import (
     JEWELRY_NECKLACE_TAXONOMY_ID,
@@ -26,8 +27,10 @@ from src.modules.etsy.attributes import (
     is_personalized,
 )
 from src.modules.etsy.client import EtsyClient
+from src.modules.sheets.sync import upsert_product_row
 
 _log = structlog.get_logger(__name__)
+_settings = Settings()
 
 # ── Section cache ──────────────────────────────────────────────────────────────
 
@@ -211,6 +214,7 @@ async def publish_product(
     product.status = ProductStatus.PUBLISHED.value
     product.published_at = datetime.now(timezone.utc)
     session.commit()
+    upsert_product_row(product, _settings)
     return listing_id
 
 
