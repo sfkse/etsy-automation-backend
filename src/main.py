@@ -3,6 +3,7 @@ from urllib.parse import quote_plus
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -15,6 +16,10 @@ from src.web.routes import content as content_routes
 from src.web.routes import approval as approval_routes
 from src.web.routes import etsy as etsy_routes
 from src.web.routes import dashboard as dashboard_routes
+from src.web.routes import sourcing as sourcing_routes
+from src.web.routes import admin as admin_routes
+from src.web.routes import listings as listings_routes
+from src.web.routes import settings as settings_routes
 
 _settings = Settings()
 
@@ -46,6 +51,19 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
 
+    # Operational Integration v2.5 — best-effort seed of shop defaults so a
+    # fresh install boots with usable variation/pricing/description rows.
+    try:
+        from src.db.seed_shop_defaults import seed_all as _seed_shop_defaults
+
+        with SessionLocal() as _seed_session:
+            _seed_shop_defaults(_seed_session)
+    except Exception as _seed_exc:  # pragma: no cover — startup best-effort
+        import structlog
+        structlog.get_logger(__name__).warning(
+            "shop_defaults_seed_skipped", error=str(_seed_exc)
+        )
+
     yield
 
     scheduler.shutdown(wait=False)
@@ -55,6 +73,14 @@ app = FastAPI(
     title="Etsy Jewelry Automation",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# Allow Chrome extension + local admin UI to call the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"chrome-extension://.*|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")
@@ -74,6 +100,7 @@ content_routes.set_templates(templates)
 approval_routes.set_templates(templates)
 etsy_routes.set_templates(templates)
 dashboard_routes.set_templates(templates)
+admin_routes.set_templates(templates)
 
 app.include_router(research_routes.router)
 app.include_router(input_routes.router)
@@ -81,6 +108,10 @@ app.include_router(content_routes.router)
 app.include_router(approval_routes.router)
 app.include_router(etsy_routes.router)
 app.include_router(dashboard_routes.router)
+app.include_router(sourcing_routes.router)
+app.include_router(admin_routes.router)
+app.include_router(listings_routes.router)
+app.include_router(settings_routes.router)
 
 
 @app.get("/")

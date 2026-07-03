@@ -12,6 +12,8 @@
 ```
 1. Sabah:   sistemi başlat (docker + uvicorn)        2 dk
 2. Sabah:   yeni ürün üret (10 ürün hedef)          25 dk
+            → Rexven ürün seç
+            → [YENİ] Phase 4 Sourcing analizi         3 dk
             → manual input → generate → approve → publish
 3. Akşam:   dünkü ürün performansını incele          5 dk
 4. Akşam:   kritik listing'leri renew (otomatik)     0 dk
@@ -24,6 +26,7 @@ Pazartesi sabah:
   • Phase 2 yeni research scrape (3-5 keyword)
   • CSV import → backend analizler güncellenir
   • Top 3 niche performansını kontrol et
+  • [YENİ] Phase 4 — haftalık yüksek potansiyelli 5 Rexven ürününü analiz et
 ```
 
 ### Aylık rutin (~1 saat)
@@ -44,7 +47,7 @@ Ay başı:
 3. **Bu profile'a Etsy mağaza hesabınla LOGIN OLMA**
 4. EHunt extension'ı **bu profile'a** yükle
 5. EHunt'a abonelik hesabınla giriş yap
-6. Etsy Research extension v2.4'ü bu profile'a yükle (`chrome://extensions` → Load unpacked)
+6. Etsy Research extension v2.6'ı bu profile'a yükle (`chrome://extensions` → Load unpacked)
 7. **Kontrol:** rastgele bir Etsy listing'i aç, EHunt panel'i yüklendiğinde "Tags :" altında 13 tag görmeli sin
 
 ### 1.2 — Backend Başlatma (2 dk)
@@ -200,6 +203,205 @@ Approve dediğin an:
 **10 yeni listing/gün** sürdürülebilir tempo. Yeni başlıyorsan **5 listing/gün** ile başla, ısındıkça artır.
 
 Etsy yeni mağazalar için "warm up" periyodu uyguluyor — ilk 30 günde 100+ listing atmak şüphe çekebilir.
+
+---
+
+## 🔍 2A. Phase 4 — Sourcing Intelligence (Ürün Seçim Rehberi)
+
+> **Ne işe yarar:** Elinde bir Rexven ürünü var ama hangi Etsy keyword'ünde çalışır bilmiyorsun. Phase 4 bunu sistematik hale getiriyor: ürün fotoğrafını AI ile analiz et, Etsy'de rakip verisi topla, fırsat skoru al.
+>
+> **Çıktı:** 5 adet sıralı Etsy keyword önerisi + her birinin fırsat skoru + rakip pazar verisi
+
+---
+
+### 2A.1 — Nasıl Çalışır (3 Katman)
+
+```
+LAYER A — Vision LLM (3-5 saniye)
+  Rexven ürün fotoğrafı → Claude Sonnet vision
+  → ~15 keyword adayı (niche / medium / broad)
+  → Ürünün görsel özelliklerini otomatik algılar
+    (form, material, style, theme, recipient, occasion)
+
+LAYER B — Fırsat Puanlama
+  Extension tarayıcıda Etsy'yi scrape eder (403 yok, gerçek browser)
+  Her aday için top-20 rakip verisini puanlar:
+  → new_shop_share   (yeni mağaza sıraya girebilir mi?)
+  → price_alignment  (senin fiyat bandın uyuyor mu?)
+  → market_activity  (keyword hâlâ canlı mı? — en güvenilir sinyal)
+  → competition      (kaç rakip var?)
+  → diversity        (tek shop dominasyonu var mı?)
+  → Sonuç: opportunity_score (0-100 arası)
+
+LAYER C — Görsel Benzerlik (opsiyonel, varsa daha zengin)
+  CLIP embedding ile veritabanındaki benzer listing'leri bulur
+  → Gerçek sıralama tahmini: "~rank 23, page 1"
+  → Layer A'nın kaçırdığı keyword'leri keşfeder
+```
+
+---
+
+### 2A.2 — Tam Kullanım Akışı (Adım Adım)
+
+> **Önemli:** Extension popup penceresi Phase 1 tab'ları açıldığında kapanır. Bu normal — akış Review sayfasından devam eder.
+
+```
+ADIM 1 — Analizi başlat
+  members.rexven.com/product-details/XXXX → sağ altta turuncu buton
+  VEYA popup → Sourcing tab → "Analyze Product"
+  → Layer A çalışır (~5 sn)
+  → Popup kapanabilir — sorun değil, analysis_id storage'a kaydedildi
+
+ADIM 2 — Phase 1 browser tab'ları izle
+  Extension ~15 Etsy search tab'ı açar ve kapar
+  Review sayfası (popup → Research → "Review candidates →") açık kalır
+  Progress: Etsy Research popup'ta görünür
+
+ADIM 3 — Review sayfasında "Send to Sourcing Analysis" tıkla
+  Phase 1 tamamlandığında review sayfasında:
+  [🔍 Send to Sourcing Analysis] butonu → tıkla
+  → Backend'e listing verisi gönderilir
+  → Layer B scoring otomatik başlar (~30 sn)
+  → Keyword kartları review sayfasında görünür
+
+ADIM 4 — Keyword seç
+  Review sayfasında sonuçlar:
+  #1 birthstone necklace   [48/100]   14/20 active
+  #2 dainty necklace       [48/100]   13/20 active
+  ...
+  → [💾 Use for Generate Content] butonu → seçtiğin keyword'ü storage'a yazar
+
+ADIM 5 — Ürün oluştur ve generate et
+  Backend /products/new → ürünü oluştur
+  Generate Content → selected_keyword_score_id otomatik uygulanır
+```
+
+---
+
+### 2A.3 — Popup Yeniden Açıldığında
+
+Popup kapandıktan sonra yeniden açarsan:
+- **Analiz tamamsa:** Sourcing tab otomatik açılır, sonuçlar yüklenir
+- **Phase 1 hâlâ çalışıyorsa:** Sourcing tab açılır, durum mesajı gösterilir
+- **Hiçbir şey yoksa:** Normal Research tab'da açılır
+
+---
+
+### 2A.4 — Review Sayfasındaki Sourcing Sonuçları
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ 🔍 Sourcing Analysis Results                            │
+│ form: pendant  style: dainty  theme: birthstone  ...    │
+│                                                         │
+│  #1  birthstone necklace              [48/100]          │
+│      avg $0.00 · 15 shops · 14/20 active                │
+│      [💾 Use for Generate Content]                       │
+│                                                         │
+│  #2  dainty necklace                  [48/100]          │
+│      avg $0.00 · 13 shops · 13/20 active                │
+│      [💾 Use for Generate Content]                       │
+└─────────────────────────────────────────────────────────┘
+```
+
+| Alan | Ne Anlama Gelir |
+|------|----------------|
+| **#1** | Fırsat sıralaması (1 = en iyi) |
+| **48/100** | opportunity_score — 60+ iyi, 75+ çok iyi |
+| **avg $X.XX** | Top-20 rakibin ortalama fiyatı (Phase 2 data olmadan $0.00 gösterir) |
+| **15 shops** | Top-20'de kaç farklı shop var — düşükse 1 shop domine ediyor |
+| **14/20 active** | EHunt'tan: hâlâ satış yapan listing oranı — **en güvenilir sinyal** |
+
+> **Neden avg $0.00?** Phase 1 search kartları her zaman `price_cents` içermiyor. Phase 2 scrape'i çalıştırdıkça bu dolar. Şimdilik `X/20 active` oranına odaklan.
+
+---
+
+### 2A.5 — Sub-Skorları Anlamak
+
+Her keyword için 5 sub-skor döner (API cevabında `sub_scores`):
+
+| Sub-Skor | İyi (>0.6) | Kötü (<0.3) | Ağırlık |
+|----------|------------|-------------|---------|
+| **new_shop_opportunity** | Top-20'de yeni shoplar sıraya girmiş | Sadece eski shoplar | %30 |
+| **price_alignment** | Senin fiyatın rakiplerle uyuşuyor | Çok ucuz veya pahalısın | %25 |
+| **market_activity** | Top-20'nin çoğu hâlâ satıyor | Ölü keyword | %25 |
+| **competition_inverted** | Arama sonucu az | Milyonlarca rakip | %10 |
+| **diversity** | Farklı shoplar sıralanmış | 1 shop top-20'yi domine ediyor | %10 |
+
+> **Pratik kural şu an:** `market_activity` (X/20 active) en güvenilir sinyal — diğerleri Phase 2 data biriktikçe anlam kazanır.
+
+---
+
+### 2A.6 — Keyword Seçtikten Sonra Ne Yapacaksın
+
+1. Review sayfasında **[💾 Use for Generate Content]** tıkla → `keyword_score_id` storage'a kaydedildi
+2. Backend'de `/products/new` → ürünü oluştur
+3. **Generate Content** sayfasında `selected_keyword_score_id` form alanına ID'yi gir
+   → LLM prompt'u bu keyword'ü birincil hedef olarak kullanır, title'ın ilk 60 karakterine koyar
+4. Approve → Publish
+
+---
+
+### 2A.7 — Sourcing Analizini Ne Zaman Yapmalısın
+
+| Durum | Sourcing Analizi Yap mı? |
+|-------|--------------------------|
+| Yeni Rexven ürün, keyword bilmiyorsun | **Mutlaka** — zaten bunun için var |
+| Bildik niş'te rutin ürün (cross necklace #47) | Opsiyonel — zaten hangi keyword işe yaradığını biliyorsun |
+| Yeni bir kategori deniyorsun (ilk kez kedi küpesi) | **Mutlaka** — yabancı toprak |
+| Mevsimsel ürün (noel kolyesi, Anneler günü) | **Evet** — seasonal keyword fırsatı araştır |
+| Rakibinin iyi sattığı ürünü kopyalıyorsun | Opsiyonel — rakipten zaten keyword öğrenebilirsin |
+
+---
+
+### 2A.8 — Layer C (CLIP) Aktifleştirme
+
+Layer C yalnızca `competitor_listings` tablosundaki listing'lerin CLIP embedding'leri varsa çalışır. İlk kez aktifleştirmek için:
+
+```bash
+# Tüm mevcut listing'lerin embedding'lerini hesapla (~2 saat, CPU)
+cd backend
+python -m src.sourcing.backfill_embeddings
+
+# Sadece ilk 1000 ile test et
+python -m src.sourcing.backfill_embeddings --max-listings 1000
+```
+
+> **Ne zaman çalıştırmalısın:** İlk `backfill`'i çalıştırmak için en az **5.000 listing** toplanmış olmalı. Daha azında görsel benzerlik anlamlı çıkmaz. Henüz yoksa Layer A + B yeterli.
+
+---
+
+### 2A.9 — Doğrudan API ile Kullanım
+
+```bash
+# Sadece Layer A (keyword önerileri, hızlı)
+curl -X POST http://localhost:8000/sourcing/suggest-keywords \
+  -F "image=@/path/to/product.jpg"
+
+# Layer B+C'yi tetikle (extension Phase 1 verisi ingested olduktan sonra)
+curl -X POST http://localhost:8000/sourcing/{analysis_id}/ingest-and-score \
+  -H "Content-Type: application/json" \
+  -d '{"cards": []}'
+
+# Sonuç sorgu (polling)
+curl http://localhost:8000/sourcing/{analysis_id}
+
+# Son 20 analiz listesi
+curl http://localhost:8000/sourcing
+```
+
+---
+
+### 2A.10 — Maliyet
+
+| İşlem | Maliyet |
+|-------|---------|
+| Layer A (1 ürün analizi) | ~$0.02-0.03 (Claude Sonnet vision) |
+| Layer B (extension browser scraping) | $0 |
+| Layer C (CLIP embedding) | $0 (local model) |
+| **100 ürün/ay** | **~$2-3** |
+
+Vision çağrısı cache'lenir — aynı ürünü tekrar analiz edersen Layer A maliyeti tekrarlanmaz.
 
 ---
 
@@ -380,7 +582,25 @@ CHECK:
 ≤2/5 → vakit kaybetme
 ```
 
-### 5.6 — Hangi Variant'ı Pick Etmeli
+### 5.6 — Phase 4 Sourcing — Hangi keyword'ü seçmeliyim?
+
+```
+Sourcing analizi döndü, 5 keyword var. Hangisini seçeyim?
+
+ÖNCE BU 3 KURALYA BAK:
+  ✓ new_shop_opportunity > 0.50?  → yeni mağaza sıraya girebiliyor
+  ✓ market_activity > 0.60?       → keyword canlı, satış var
+  ✓ estimated_rank ≤ 48?          → page 1'e girebilirsin
+
+3/3 → #1 sıradaki keyword'ü al
+2/3 → #1 var mı, ona bak; yoksa #2'ye geç
+1/3 → tüm adaylar riskli; farklı ürün dene veya keyword üret
+
+BONUS: price_alignment > 0.70 ise fiyatlamada rahat olacaksın.
+       diversity < 0.40 ise 1 shop domine ediyor — dikkat.
+```
+
+### 5.7 — Hangi Variant'ı Pick Etmeli
 
 **Karar ağacı:**
 
@@ -399,7 +619,7 @@ CHECK:
    swapped)
 ```
 
-### 5.7 — Phase 2 ne kadar listing scrape etmeli
+### 5.8 — Phase 2 ne kadar listing scrape etmeli
 
 | Senaryo | Phase 2 listing sayısı |
 |---------|-----------------------|
@@ -426,6 +646,10 @@ CHECK:
 | Sales sinyali olmadan refresh refresh refresh | Token + EHunt quota israfı | Haftada 1 refresh yeter |
 | Forbidden word ("Stone" alone) title'da | Etsy listing reject olabilir | Validator zaten yakalar |
 | AI image'i "real product" alt text'iyle | Yanıltıcı pazarlama, müşteri şikayeti | Lifestyle/concept alt text |
+| Sourcing analizini Etsy mağaza hesabı profiliyle yapmak | Bot algı riski (mini-Phase1 Etsy scraper kullanıyor) | Research profile kullan |
+| Layer B sonucu beklenmeden keyword'ü seçmek | Sadece LLM tahmini var, pazar verisi yok | Status COMPLETED olana kadar bekle |
+| selected_keyword_score_id olmadan generate etmek | LLM keyword'ü bilmeden üretir, title'a yerleştirmez | ID'yi mutlaka form'a ekle |
+| backfill'i 5000'den az listing varken çalıştırmak | Görsel benzerlik anlamsız sonuç verir | Önce Phase 1+2'yi doldur |
 
 ---
 
@@ -565,6 +789,7 @@ Phase 2 başlat: review tab → seç → "Start Phase 2"
 CSV indir:      review tab → "Export CSV"
 Recon page:     popup → "Recon current tab"
 Stop all:       popup → "Stop"
+Sourcing analiz: Rexven sayfasında turuncu buton → OR → popup → "Sourcing" tab → Analyze Product
 ```
 
 ### URL'ler
@@ -575,6 +800,12 @@ Approval queue:      localhost:8000/products/awaiting_approval
 Published:           localhost:8000/products/published
 Analytics:           localhost:8000/admin/analytics
 Logs:                localhost:8000/admin/jobs
+
+--- Phase 4 Sourcing ---
+Sourcing listesi:    localhost:8000/sourcing
+Analiz başlat:       POST localhost:8000/sourcing/analyze
+Sadece keywords:     POST localhost:8000/sourcing/suggest-keywords
+Analiz sonucu:       GET  localhost:8000/sourcing/{analysis_id}
 ```
 
 ---

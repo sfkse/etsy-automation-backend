@@ -27,8 +27,8 @@ class KeywordPoolManager:
             self._session.query(KeywordPool)
             .filter(KeywordPool.carrier_pillar == pillar)
             .order_by(
-                # coerce category sort: big first, then medium, then niche
-                KeywordPool.category.desc(),
+                # coerce category sort: big first, then medium, then niche (b < m < n alphabetically)
+                KeywordPool.category.asc(),
                 KeywordPool.keyword.asc(),
             )
             .limit(limit)

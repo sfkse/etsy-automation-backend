@@ -20,6 +20,26 @@ from src.db.session import Base
 from src.domain.carrier_pillar import CarrierPillar  # noqa: F401 — re-used in column
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: Sourcing Intelligence — Enums
+# ---------------------------------------------------------------------------
+
+
+class SourcingStatus(str, Enum):
+    PENDING = "pending"
+    LAYER_A_RUNNING = "layer_a_running"
+    LAYER_B_RUNNING = "layer_b_running"
+    LAYER_C_RUNNING = "layer_c_running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class KeywordTier(str, Enum):
+    NICHE = "niche"
+    MEDIUM = "medium"
+    BROAD = "broad"
+
+
 class ProductStatus(str, Enum):
     MANUAL_INPUT = "manual_input"
     IMAGE_PROCESSING = "image_processing"
@@ -78,10 +98,27 @@ class Product(Base):
     approved_at = Column(DateTime)
     published_at = Column(DateTime)
 
+    # Operational Integration (v2.5) — Listing Builder additive columns
+    variation_preset_id = Column(Integer, ForeignKey("variation_presets.id"), nullable=True)
+    personalization_template_id = Column(Integer, ForeignKey("personalization_templates.id"), nullable=True)
+    target_keyword = Column(String(100), nullable=True)
+    material_type = Column(String(30), nullable=True)   # MaterialType enum value
+    stone_shape = Column(String(50), nullable=True)
+    holiday_override = Column(String(50), nullable=True)
+    is_featured = Column(Boolean, default=False)
+    theme = Column(String(100), nullable=True)
+    chain_style = Column(String(50), nullable=True)
+    recipients_json = Column(JSONB, nullable=True)
+    occasions_json = Column(JSONB, nullable=True)
+    rexven_url = Column(String(500), nullable=True)
+    original_image_path = Column(String(500), nullable=True)
+    cost_cents = Column(Integer, nullable=True)
+
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
     approval_overrides = relationship("ApprovalOverride", back_populates="product")
     renew_logs = relationship("RenewLog", back_populates="product")
+    variation_rows = relationship("VariationRow", back_populates="product", cascade="all, delete-orphan")
 
 
 class ProductImage(Base):
@@ -240,6 +277,15 @@ class CompetitorListing(Base):
     scraped_at = Column(DateTime)
     imported_at = Column(DateTime, default=datetime.utcnow)
 
+    # Phase 4: Sourcing Intelligence — mini-Phase-1 scrape tagging
+    scraped_for_sourcing = Column(Boolean, default=False, index=True)
+    sourcing_analysis_id = Column(Integer, ForeignKey("sourcing_analyses.id"), nullable=True)
+
+    # Phase 4: CLIP embedding (stored as JSON float list; migrate to pgvector later)
+    image_embedding = Column(JSONB, nullable=True)
+    image_embedding_model = Column(String(50), nullable=True)
+    image_embedding_computed_at = Column(DateTime, nullable=True)
+
 
 class KeywordResearch(Base):
     """Aggregated stats per keyword. Refreshed after each CSV import."""
@@ -288,3 +334,328 @@ class CompetitorShop(Base):
 
     first_seen_at = Column(DateTime, default=datetime.utcnow)
     last_seen_at = Column(DateTime)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Sourcing Intelligence
+# ---------------------------------------------------------------------------
+
+
+class SourcingAnalysis(Base):
+    """One row per 'analyze this Rexven product' invocation."""
+
+    __tablename__ = "sourcing_analyses"
+
+    id = Column(Integer, primary_key=True)
+
+    # Source identification — accept any of three inputs
+    rexven_url = Column(String(500), nullable=True, index=True)
+    rexven_sku = Column(String(50), nullable=True, index=True)
+    image_path = Column(String(500), nullable=True)
+    image_url = Column(String(500), nullable=True)
+
+    # Rexven product metadata
+    rexven_title_tr = Column(String(255), nullable=True)
+    rexven_title_en = Column(String(255), nullable=True)
+    rexven_cost_usd_cents = Column(Integer, nullable=True)
+    rexven_premium_cost_usd_cents = Column(Integer, nullable=True)
+    rexven_category = Column(String(50), nullable=True)
+    rexven_has_satisa_uygun_badge = Column(Boolean, default=False)
+    rexven_has_yeni_badge = Column(Boolean, default=False)
+
+    # Analysis state
+    status = Column(String(30), default=SourcingStatus.PENDING.value)
+    layer_a_completed = Column(Boolean, default=False)
+    layer_b_completed = Column(Boolean, default=False)
+    layer_c_completed = Column(Boolean, default=False)
+    error_message = Column(Text, nullable=True)
+
+    # Cost tracking
+    vision_tokens_used = Column(Integer, default=0)
+    vision_cost_usd_cents = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    candidates = relationship("KeywordCandidate", back_populates="analysis", cascade="all, delete-orphan")
+    scores = relationship("KeywordScore", back_populates="analysis", cascade="all, delete-orphan")
+
+
+class KeywordCandidate(Base):
+    """Raw output from Layer A — keyword candidate before scoring."""
+
+    __tablename__ = "keyword_candidates"
+
+    id = Column(Integer, primary_key=True)
+    analysis_id = Column(Integer, ForeignKey("sourcing_analyses.id"), nullable=False)
+
+    keyword = Column(String(100), nullable=False, index=True)
+    tier = Column(String(10), nullable=False)   # "niche" / "medium" / "broad"
+
+    rationale = Column(Text, nullable=True)
+    detected_attributes = Column(JSONB, nullable=True)
+
+    # Which layer proposed this candidate: "A" (vision LLM) or "C" (CLIP similarity)
+    source_layer = Column(String(10), default="A")
+
+    analysis = relationship("SourcingAnalysis", back_populates="candidates")
+
+
+class KeywordScore(Base):
+    """Post-Layer-B opportunity-scored keyword. One per candidate that passed scoring."""
+
+    __tablename__ = "keyword_scores"
+
+    id = Column(Integer, primary_key=True)
+    analysis_id = Column(Integer, ForeignKey("sourcing_analyses.id"), nullable=False)
+    candidate_id = Column(Integer, ForeignKey("keyword_candidates.id"), nullable=False)
+
+    keyword = Column(String(100), nullable=False)
+
+    # Sub-scores (0.0–1.0)
+    score_new_shop_share = Column(Float, nullable=True)
+    score_price_alignment = Column(Float, nullable=True)
+    score_activity = Column(Float, nullable=True)
+    score_competition = Column(Float, nullable=True)
+    score_diversity = Column(Float, nullable=True)
+
+    opportunity_score = Column(Float, index=True, nullable=True)
+
+    # Empirical market data captured at scoring time
+    top20_avg_price_cents = Column(Integer, nullable=True)
+    top20_avg_shop_age = Column(Float, nullable=True)
+    top20_keyword_total_results = Column(Integer, nullable=True)
+    top20_unique_shops = Column(Integer, nullable=True)
+    top20_with_recent_sales = Column(Integer, nullable=True)
+
+    # Layer C enrichment (populated when CLIP analysis runs)
+    estimated_rank = Column(Integer, nullable=True)
+    estimated_page = Column(Integer, nullable=True)
+    visual_similarity_support = Column(Integer, nullable=True)
+
+    rank_in_recommendation = Column(Integer, nullable=True)
+
+    analysis = relationship("SourcingAnalysis", back_populates="scores")
+
+
+class RexvenProductEmbedding(Base):
+    """Cached CLIP embedding for a Rexven product image — avoids recomputing."""
+
+    __tablename__ = "rexven_product_embeddings"
+
+    id = Column(Integer, primary_key=True)
+    image_hash = Column(String(64), unique=True, nullable=False, index=True)
+    image_path = Column(String(500), nullable=True)
+    embedding = Column(JSONB, nullable=False)
+    model_name = Column(String(50), nullable=True)
+    computed_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Operational Integration v2.5 — Shop Settings, Templates, Variations, Pricing
+# ---------------------------------------------------------------------------
+
+
+class RenewalOption(str, Enum):
+    AUTOMATIC = "automatic"
+    MANUAL = "manual"
+
+
+class JewelryCategory(str, Enum):
+    NECKLACE = "necklace"
+    BRACELET = "bracelet"
+    EARRING = "earring"
+    RING = "ring"
+    ANKLET = "anklet"
+
+
+class MaterialType(str, Enum):
+    BRASS = "brass"
+    SILVER_925 = "silver_925"
+    GOLD_PLATED = "gold_plated"
+
+
+class ShopSettings(Base):
+    """Singleton table — exactly one row (id=1) holds shop-level configuration."""
+
+    __tablename__ = "shop_settings"
+
+    id = Column(Integer, primary_key=True)
+
+    shop_name = Column(String(100), nullable=True)
+    shop_id = Column(String(20), nullable=True)
+
+    # Production Partner (one-time Etsy setup)
+    production_partner_id = Column(String(50), nullable=True)
+    production_partner_name = Column(String(100), nullable=True)
+    production_partner_about = Column(String(255), nullable=True)
+    production_partner_location = Column(String(100), nullable=True)
+    production_partner_q1 = Column(String(50), default="capacity")
+    production_partner_q2 = Column(String(50), default="design")
+    production_partner_q3 = Column(String(50), default="everything")
+
+    # Operational policies
+    renewal_option = Column(String(20), default=RenewalOption.AUTOMATIC.value)
+    return_policy_days = Column(Integer, default=14)
+    feature_listing_default = Column(Boolean, default=False)
+
+    # Quantity strategy
+    default_quantity = Column(Integer, default=999)
+
+    # 22K disclosure rule (from Master Rehber)
+    omit_karat_in_title = Column(Boolean, default=True)
+
+    # Carrier pillars active for this shop
+    active_pillars = Column(JSONB, default=lambda: [
+        "cross", "name", "birthstone", "birth_flower", "pet", "pendant"
+    ])
+
+    # Default shipping profile (referenced by Etsy payload builder)
+    default_shipping_profile_id = Column(String(50), nullable=True)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DescriptionTemplate(Base):
+    """Per-category description scaffold. Filled with product-specific blanks at gen time."""
+
+    __tablename__ = "description_templates"
+
+    id = Column(Integer, primary_key=True)
+    category = Column(String(20), nullable=False, unique=True)   # JewelryCategory value
+
+    section_intro = Column(Text, nullable=True)
+    section_how_to_order = Column(Text, nullable=True)
+    section_materials = Column(Text, nullable=True)
+    section_packaging = Column(Text, nullable=True)
+    section_gift_note = Column(Text, nullable=True)
+    section_best_gifts_for = Column(Text, nullable=True)
+    section_have_a_question = Column(Text, nullable=True)
+
+    brass_overrides = Column(JSONB, nullable=True)
+    silver_overrides = Column(JSONB, nullable=True)
+
+    default_chain_text = Column(Text, nullable=True)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DefaultAttributes(Base):
+    """Default Etsy attribute values applied to every listing unless overridden."""
+
+    __tablename__ = "default_attributes"
+
+    id = Column(Integer, primary_key=True)
+    category = Column(String(20), nullable=False, unique=True)   # JewelryCategory value
+
+    style = Column(String(50), default="Minimalist")
+    theme = Column(String(50), default="Love & Friendship")
+    holiday_default = Column(String(50), default="Christmas")
+
+    sustainability = Column(String(50), default="Made with Recycled Metals")
+    chain_style = Column(String(50), default="Cable Chain")
+    adjustable = Column(Boolean, default=True)
+    convertible = Column(Boolean, default=True)
+
+    default_occasion = Column(String(50), default="Birthday")
+
+    default_recipients = Column(JSONB, default=lambda: [
+        "Her", "Mother", "Wife", "Daughter", "Sister"
+    ])
+
+
+class VariationPreset(Base):
+    """Variation matrix template. One row = one default skeleton."""
+
+    __tablename__ = "variation_presets"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(60), nullable=False, unique=True)
+
+    category = Column(String(20), nullable=False)          # JewelryCategory
+    material_type = Column(String(30), nullable=False)     # MaterialType
+
+    finishes = Column(JSONB, nullable=False)
+    lengths_inches = Column(JSONB, nullable=True)
+
+    multi_count_label = Column(String(50), nullable=True)
+    multi_count_range = Column(JSONB, nullable=True)
+
+    has_length_variation = Column(Boolean, default=True)
+
+
+class PricingStrategy(Base):
+    """Singleton — how prices are computed across the variation matrix."""
+
+    __tablename__ = "pricing_strategy"
+
+    id = Column(Integer, primary_key=True)
+
+    base_multiplier = Column(Float, default=4.0)
+
+    finish_offsets_pct = Column(JSONB, default=lambda: {
+        "Gold": 0.0, "Silver": -3.0, "Rose": -5.0
+    })
+
+    length_base_inches = Column(Integer, default=16)
+    length_price_per_extra_inch_pct = Column(Float, default=2.5)
+
+    loss_leader_enabled = Column(Boolean, default=True)
+    loss_leader_finish = Column(String(20), default="Rose")
+    loss_leader_length = Column(Integer, default=12)
+    loss_leader_margin_pct = Column(Float, default=15.0)
+
+    # Multi-count surcharge (percent per extra unit)
+    multi_count_extra_pct = Column(Float, default=12.0)
+
+
+class PersonalizationTemplate(Base):
+    """Library of personalization scaffolds. Picked per product."""
+
+    __tablename__ = "personalization_templates"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(60), nullable=False, unique=True)
+
+    instruction_text = Column(Text, nullable=True)
+    example_text = Column(Text, nullable=True)
+    reference_note = Column(Text, nullable=True)
+
+    max_characters = Column(Integer, default=0)
+    is_optional = Column(Boolean, default=False)
+
+    applicable_categories = Column(JSONB, default=lambda: ["necklace", "bracelet"])
+    type_signature = Column(JSONB, nullable=True)
+
+
+class ShopSection(Base):
+    """The shop sections from the operational training."""
+
+    __tablename__ = "shop_sections"
+
+    id = Column(Integer, primary_key=True)
+    etsy_section_id = Column(String(50), nullable=True)
+    name = Column(String(60), nullable=False, unique=True)
+    carrier_pillar = Column(String(50), nullable=True)
+    display_order = Column(Integer, default=0)
+
+
+class VariationRow(Base):
+    """One row per cell in a product's Finish x Length x MultiCount matrix."""
+
+    __tablename__ = "variation_rows"
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
+
+    finish = Column(String(20), nullable=False)
+    length_inches = Column(Integer, nullable=True)
+    multi_count = Column(Integer, nullable=True)
+
+    price_cents = Column(Integer, nullable=False)
+    sku_suffix = Column(String(40), nullable=False)
+    is_loss_leader = Column(Boolean, default=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="variation_rows")

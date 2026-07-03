@@ -75,11 +75,20 @@ def _build_orchestrator(session: Session) -> VariantBundleOrchestrator:
     return VariantBundleOrchestrator(title_gen, tag_gen, desc_gen, linker, research)
 
 
-async def _run_content_pipeline(product_sku: str) -> None:
+async def _run_content_pipeline(
+    product_sku: str,
+    selected_keyword_score_id: int | None = None,
+) -> None:
     """
     Background task: opens its own DB session, runs the orchestrator,
     stores the VariantBundle as JSON, and advances the product status.
+
+    When selected_keyword_score_id is provided (Phase 4 sourcing bridge),
+    the winning keyword's empirical market data is injected into the research
+    context so every LLM call is grounded in the chosen keyword.
     """
+    from src.modules.research.context_builder import build_sourcing_addendum
+
     session = SessionLocal()
     try:
         product = session.query(Product).filter_by(sku=product_sku).first()
@@ -88,6 +97,12 @@ async def _run_content_pipeline(product_sku: str) -> None:
             return
 
         orchestrator = _build_orchestrator(session)
+
+        # Phase 4 bridge: inject sourcing context when a keyword score was selected
+        if selected_keyword_score_id:
+            addendum = build_sourcing_addendum(session, selected_keyword_score_id)
+            if addendum:
+                _patch_research_builder_for_sourcing(orchestrator, addendum)
 
         try:
             bundle = await orchestrator.generate_bundle(product)
@@ -98,15 +113,53 @@ async def _run_content_pipeline(product_sku: str) -> None:
             upsert_product_row(product, _settings)
             return
 
-        # Store bundle as list of variant dicts in the JSONB column
         product.generated_variants = [v.to_dict() for v in bundle.variants]
         product.status = ProductStatus.AWAITING_APPROVAL.value
         session.commit()
         upsert_product_row(product, _settings)
-        _log.info("content_pipeline_complete", sku=product_sku, variants=len(bundle.variants))
+        _log.info(
+            "content_pipeline_complete",
+            sku=product_sku,
+            variants=len(bundle.variants),
+            sourcing_grounded=bool(selected_keyword_score_id),
+        )
 
     finally:
         session.close()
+
+
+def _patch_research_builder_for_sourcing(
+    orchestrator,
+    sourcing_addendum: str,
+) -> None:
+    """
+    Wrap the orchestrator's ResearchContextBuilder so every build_* call
+    appends the sourcing addendum to the returned ResearchContext.
+    """
+    from src.modules.research.context_builder import ResearchContextBuilder
+
+    original_builder: ResearchContextBuilder = orchestrator.research
+
+    class _SourcingAwareBuilder(ResearchContextBuilder):
+        def build_for_carrier_pillar(self, pillar):
+            ctx = original_builder.build_for_carrier_pillar(pillar)
+            ctx.sourcing_addendum = sourcing_addendum
+            return ctx
+
+        def build_for_keywords(self, keywords):
+            ctx = original_builder.build_for_keywords(keywords)
+            ctx.sourcing_addendum = sourcing_addendum
+            return ctx
+
+        def current_snapshot_id(self, pillar) -> str:
+            return original_builder.current_snapshot_id(pillar)
+
+    patched = _SourcingAwareBuilder.__new__(_SourcingAwareBuilder)
+    patched.__dict__.update(original_builder.__dict__)
+    orchestrator.research = patched
+    orchestrator.title.research = patched
+    orchestrator.tag.research = patched
+    orchestrator.desc.research = patched
 
 
 # ── Content Generation Trigger ────────────────────────────────────────────────
@@ -115,11 +168,15 @@ async def _run_content_pipeline(product_sku: str) -> None:
 async def trigger_content_generation(
     sku: str,
     background_tasks: BackgroundTasks,
+    selected_keyword_score_id: int | None = Form(None),
     session: Session = Depends(get_session),
 ):
     """
     Trigger the LLM content pipeline for the product.
     Sets status → content_generating and enqueues the background task.
+
+    Optionally accepts selected_keyword_score_id (Phase 4 sourcing bridge):
+    when provided, the chosen keyword's market data is injected into LLM prompts.
     """
     product = session.query(Product).filter_by(sku=sku).first()
     if not product:
@@ -138,11 +195,8 @@ async def trigger_content_generation(
     session.commit()
     upsert_product_row(product, _settings)
 
-    background_tasks.add_task(_run_content_pipeline, sku)
+    background_tasks.add_task(_run_content_pipeline, sku, selected_keyword_score_id)
     return RedirectResponse(url=f"/products/{sku}/progress", status_code=303)
-
-
-# ── Keyword Pool Admin ────────────────────────────────────────────────────────
 
 @router.get("/admin/keywords", response_class=HTMLResponse)
 async def keyword_list(

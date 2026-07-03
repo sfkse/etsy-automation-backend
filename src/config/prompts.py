@@ -7,6 +7,43 @@ per-call context. Never inline prompt strings inside generator classes.
 
 # ── Title Generation ──────────────────────────────────────────────────────────
 
+# Section F of OPERATIONAL_INTEGRATION.md — approved adjective vocabulary that
+# the model should draw from consistently across variants.
+JEWELRY_ADJECTIVE_LADDER = """\
+APPROVED ADJECTIVE VOCABULARY (use these to vary titles within the 137-140 char limit):
+
+Personalization-type adjectives (pick 1-2 per title):
+- Custom
+- Personalized
+- Customized
+
+Aesthetic adjectives (pick 1-2 per title):
+- Dainty
+- Minimalist
+
+Material adjectives (pick 1, must match the actual material):
+- Gold
+- 14K Gold        (only if actually 14K solid or 14K plated)
+- Silver
+- Sterling Silver (only if 925 sterling — never for brass)
+
+Forbidden combinations:
+- "Solid Gold" + "Gold Plated" — never both in the same title
+- "Sterling Silver" + brass material — never together
+- "Stone" alone — use "CZ" or "Pave" instead
+- "Pendant" alone — always "Pendant Necklace"
+
+Shape descriptors (use only if the visible product has that shape):
+- Drop / Water Drop  (for teardrop-shaped stones)
+- Heart
+- Round
+- Pear
+- Marquise
+- Pave
+- Baguette
+"""
+
+
 TITLE_GENERATION_PROMPT = """\
 You are an expert Etsy SEO copywriter specialising in jewelry listings.
 
@@ -23,6 +60,8 @@ STRICT RULES (must never be violated):
 5. No repeated non-stop words (stop words: and, for, the, with, a, an, of, in, to, by, at).
 6. Separate phrase groups with ", " (comma + space). Never use "|".
 7. The first 60 characters must contain the core niche keyword.
+
+{adjective_ladder}
 
 KEYWORD POOL (base candidates — use these, do not invent keywords):
 {keyword_pool}

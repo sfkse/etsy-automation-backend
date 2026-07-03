@@ -32,6 +32,7 @@ class ResearchContext:
     cliches_to_avoid: list[str]
     volume_stratified_tags: dict | None = None
     avg_volume_by_position: list[int | None] | None = None
+    sourcing_addendum: str | None = None  # Phase 4: injected when a keyword score is selected
 
     @classmethod
     def empty(cls) -> "ResearchContext":
@@ -108,6 +109,9 @@ class ResearchContext:
                 f"- MEDIUM tags (10M-50M, balanced): {medium or '(none in sample)'}",
                 f"- NICHE tags (<10M, low competition, highly targeted): {niche or '(none in sample)'}",
             ]
+
+        if self.sourcing_addendum:
+            lines += ["", self.sourcing_addendum]
 
         return "\n".join(lines)
 
@@ -308,3 +312,58 @@ def _fmt_vol(v: int) -> str:
     if v >= 1_000:
         return f"{v / 1_000:.0f}K"
     return str(v)
+
+
+def build_sourcing_addendum(session: Session, selected_keyword_score_id: int) -> str | None:
+    """
+    Phase 4 bridge — build a sourcing addendum for the content generation prompt.
+
+    When a user picks a keyword from the sourcing analysis, this function
+    loads the KeywordScore + its empirical top-20 competitor listings and
+    formats a compact brief that grounds the LLM in the winning keyword's
+    real market data.
+
+    Returns None if the keyword score is not found.
+    """
+    from src.db.models import CompetitorListing, KeywordScore
+
+    score = session.query(KeywordScore).filter_by(id=selected_keyword_score_id).first()
+    if not score:
+        return None
+
+    top20 = (
+        session.query(CompetitorListing)
+        .filter(CompetitorListing.keyword_searched == score.keyword)
+        .order_by(CompetitorListing.rank_in_search.asc().nullslast())
+        .limit(20)
+        .all()
+    )
+
+    competitor_titles = [l.title for l in top20 if l.title][:10]
+
+    # Flatten tags from top-20 listings
+    tag_counter: dict[str, int] = {}
+    for listing in top20:
+        if isinstance(listing.tags, list):
+            for tag in listing.tags:
+                if tag:
+                    tag_counter[tag] = tag_counter.get(tag, 0) + 1
+    top_tags = sorted(tag_counter.items(), key=lambda x: x[1], reverse=True)[:20]
+    tag_pool_str = ", ".join(t for t, _ in top_tags) if top_tags else "(none)"
+
+    price_band_min = round((score.top20_avg_price_cents or 0) * 0.8 / 100, 2)
+    price_band_max = round((score.top20_avg_price_cents or 0) * 1.2 / 100, 2)
+
+    lines = [
+        "SOURCING INTELLIGENCE (Phase 4 — keyword grounding):",
+        f"- PRIMARY TARGET KEYWORD: '{score.keyword}' — use this in the title within the first 60 characters.",
+        f"- Opportunity score: {round(score.opportunity_score or 0, 2)} / 1.0",
+        f"- Market price band: ${price_band_min:.2f} – ${price_band_max:.2f} (avg ${(score.top20_avg_price_cents or 0) / 100:.2f})",
+        f"- Competitor tag pool (use for tag selection): {tag_pool_str}",
+    ]
+    if competitor_titles:
+        lines.append("- Top competitor titles (reference only — do NOT copy):")
+        for t in competitor_titles[:5]:
+            lines.append(f"    • {t}")
+
+    return "\n".join(lines)

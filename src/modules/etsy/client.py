@@ -128,6 +128,21 @@ class EtsyClient:
             params={"start_date": start_date, "end_date": end_date},
         )
 
+    # ── Inventory (variations) ─────────────────────────────────────────────────
+
+    async def update_inventory(self, listing_id: str, inventory: dict) -> dict:
+        """Replace the inventory (variation matrix) for a listing.
+
+        PUT /application/listings/{listing_id}/inventory. Called by the
+        Operational Integration payload builder after a variation-aware
+        create_listing.
+        """
+        return await self.request(
+            "PUT",
+            f"/application/listings/{listing_id}/inventory",
+            json=inventory,
+        )
+
     async def renew_listing(self, listing_id: str) -> dict:
         """Renew a listing, resetting its 4-month expiry timer.
 

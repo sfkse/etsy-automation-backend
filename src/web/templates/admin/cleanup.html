@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Admin — Database Cleanup{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h2 class="mb-0 text-danger">Database Cleanup</h2>
+    <p class="text-muted mb-0">Wipe every application table. Schema is preserved; row data is destroyed.</p>
+  </div>
+</div>
+
+{% if wiped %}
+<div class="alert alert-success">
+  <strong>Done.</strong> All application tables have been truncated and identity sequences reset.
+</div>
+{% endif %}
+
+<div class="card border-danger mb-4">
+  <div class="card-header bg-danger text-white fw-semibold">
+    Danger zone
+  </div>
+  <div class="card-body">
+    <p class="mb-3">
+      This will run <code>TRUNCATE ... RESTART IDENTITY CASCADE</code> on every table managed by
+      the application's SQLAlchemy metadata. Alembic migration state is left untouched.
+      <strong>This cannot be undone.</strong>
+    </p>
+
+    <p class="mb-2"><strong>Current row counts</strong> (total: {{ total }})</p>
+    <div class="table-responsive mb-3">
+      <table class="table table-sm table-striped align-middle mb-0">
+        <thead>
+          <tr><th>Table</th><th class="text-end">Rows</th></tr>
+        </thead>
+        <tbody>
+          {% for name, n in counts %}
+          <tr>
+            <td><code>{{ name }}</code></td>
+            <td class="text-end {% if n > 0 %}fw-semibold{% else %}text-muted{% endif %}">{{ n }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <form method="post" action="/admin/cleanup"
+          onsubmit="return confirm('Permanently delete all rows from every table? This cannot be undone.');">
+      <button type="submit" class="btn btn-danger" {% if total == 0 %}disabled{% endif %}>
+        Wipe everything
+      </button>
+      <a href="/" class="btn btn-outline-secondary ms-2">Cancel</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

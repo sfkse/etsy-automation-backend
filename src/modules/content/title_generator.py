@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import structlog
 
-from src.config.prompts import TITLE_GENERATION_PROMPT
+from src.config.prompts import JEWELRY_ADJECTIVE_LADDER, TITLE_GENERATION_PROMPT
 from src.db.models import Product
 from src.domain.validators import validate_title
 from src.modules.llm.angles import VariantAngle
@@ -121,6 +121,7 @@ class TitleGenerator:
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
+            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords — use product type)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,
@@ -151,6 +152,7 @@ class TitleGenerator:
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
+            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,

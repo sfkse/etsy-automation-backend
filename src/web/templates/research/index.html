@@ -41,7 +41,9 @@
   <div class="card-header text-warning fw-semibold">Keywords with data but not yet analyzed</div>
   <div class="card-body">
     {% for kw in unanalyzed %}
-    <a href="/research/{{ kw | urlencode }}/refresh" class="badge bg-warning text-dark text-decoration-none me-1 mb-1">{{ kw }} (analyze)</a>
+    <form method="post" action="/research/{{ kw | urlencode }}/refresh" class="d-inline">
+      <button type="submit" class="badge bg-warning text-dark border-0 me-1 mb-1" style="cursor:pointer">{{ kw }} (analyze)</button>
+    </form>
     {% endfor %}
   </div>
 </div>

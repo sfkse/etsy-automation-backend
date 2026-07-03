@@ -8,12 +8,15 @@ GET  /research/shops       — competitor shop list
 GET  /research/{keyword}   — keyword detail + refresh button
 POST /research/{keyword}/refresh — re-run analyzers
 """
+
 from __future__ import annotations
 
 import io
 from urllib.parse import unquote
 
 import pandas as pd
+from typing import Optional
+
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -21,7 +24,12 @@ from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
 from src.db.dependencies import get_session
-from src.db.models import CompetitorListing, CompetitorShop, KeywordResearch, ShopClassification
+from src.db.models import (
+    CompetitorListing,
+    CompetitorShop,
+    KeywordResearch,
+    ShopClassification,
+)
 from src.modules.research.csv_import import merge_listing, parse_csv_to_listings
 from src.modules.research.pipeline import refresh_keyword_research
 from src.modules.research.scoring import compute_sales_signal_score
@@ -29,7 +37,9 @@ from src.modules.research.shop_classifier import upsert_competitor_shop
 from src.utils.llm_client import get_llm_client
 
 router = APIRouter(prefix="/research", tags=["research"])
-templates: Jinja2Templates | None = None  # set by main.py after creating Jinja2Templates
+templates: Jinja2Templates | None = (
+    None  # set by main.py after creating Jinja2Templates
+)
 
 
 def set_templates(t: Jinja2Templates) -> None:
@@ -46,6 +56,7 @@ def _tmpl(name: str, request: Request, context: dict, **kwargs) -> HTMLResponse:
 # CSV Import
 # ---------------------------------------------------------------------------
 
+
 @router.get("/import", response_class=HTMLResponse)
 async def import_form(request: Request):
     return _tmpl("research/import.html", request, {"result": None, "error": None})
@@ -55,7 +66,7 @@ async def import_form(request: Request):
 async def import_csv(
     request: Request,
     file: UploadFile = File(...),
-    refresh_analyzers: bool = Form(True),
+    refresh_analyzers: Optional[str] = Form(None),
     session: Session = Depends(get_session),
 ):
     llm_client = get_llm_client()
@@ -65,7 +76,8 @@ async def import_csv(
         df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig")
     except Exception as exc:
         return _tmpl(
-            "research/import.html", request,
+            "research/import.html",
+            request,
             {"result": None, "error": f"Could not parse CSV: {exc}"},
             status_code=400,
         )
@@ -112,7 +124,7 @@ async def import_csv(
     session.commit()
 
     keywords_refreshed: list[str] = []
-    if refresh_analyzers:
+    if refresh_analyzers is not None:
         for kw in summary["keywords"]:
             if kw:
                 await refresh_keyword_research(session, kw, llm_client)
@@ -132,6 +144,7 @@ async def import_csv(
 # Keyword Index
 # ---------------------------------------------------------------------------
 
+
 @router.get("", response_class=HTMLResponse)
 async def research_index(request: Request, session: Session = Depends(get_session)):
     keywords = session.query(KeywordResearch).order_by(KeywordResearch.keyword).all()
@@ -145,7 +158,8 @@ async def research_index(request: Request, session: Session = Depends(get_sessio
     unanalyzed = [kw for kw in scraped_keywords if kw not in analyzed_set]
 
     return _tmpl(
-        "research/index.html", request,
+        "research/index.html",
+        request,
         {"keywords": keywords, "unanalyzed": unanalyzed},
     )
 
@@ -154,6 +168,7 @@ async def research_index(request: Request, session: Session = Depends(get_sessio
 # Competitor Shops
 # ---------------------------------------------------------------------------
 
+
 @router.get("/shops", response_class=HTMLResponse)
 async def shops_list(request: Request, session: Session = Depends(get_session)):
     shops = (
@@ -161,9 +176,12 @@ async def shops_list(request: Request, session: Session = Depends(get_session)):
         .order_by(CompetitorShop.classification, CompetitorShop.total_sales.desc())
         .all()
     )
-    classification_labels = {c.value: c.value.replace("_", " ").title() for c in ShopClassification}
+    classification_labels = {
+        c.value: c.value.replace("_", " ").title() for c in ShopClassification
+    }
     return _tmpl(
-        "research/shops.html", request,
+        "research/shops.html",
+        request,
         {"shops": shops, "classification_labels": classification_labels},
     )
 
@@ -171,6 +189,7 @@ async def shops_list(request: Request, session: Session = Depends(get_session)):
 # ---------------------------------------------------------------------------
 # Keyword Detail
 # ---------------------------------------------------------------------------
+
 
 @router.get("/{keyword_slug}", response_class=HTMLResponse)
 async def keyword_detail(
@@ -190,7 +209,8 @@ async def keyword_detail(
     )
 
     return _tmpl(
-        "research/keyword_detail.html", request,
+        "research/keyword_detail.html",
+        request,
         {"keyword": keyword, "research": research, "top_listings": top_listings},
     )
 

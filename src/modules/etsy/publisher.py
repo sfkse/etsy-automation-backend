@@ -66,8 +66,20 @@ async def create_listing(
     product: Product,
     shipping_profile_id: int,
     return_policy_id: int,
+    session: "Session | None" = None,
 ) -> str:
-    """Create a draft listing on Etsy and return its listing_id."""
+    """Create a draft listing on Etsy and return its listing_id.
+
+    When the product carries a `variation_preset_id` (Listing Builder flow),
+    delegates payload assembly to ``EtsyListingPayloadBuilder`` and, after
+    creation, uploads the variation matrix via ``update_inventory``. Legacy
+    manual-input products keep the pre-existing single-price payload.
+    """
+    if product.variation_preset_id and session is not None:
+        return await _create_listing_with_variations(
+            client, product, session, shipping_profile_id, return_policy_id
+        )
+
     tags: list[str] = product.final_tags or []
 
     payload: dict = {
@@ -92,6 +104,57 @@ async def create_listing(
     )
     listing_id = str(resp["listing_id"])
     _log.info("Draft listing created", sku=product.sku, listing_id=listing_id)
+    return listing_id
+
+
+async def _create_listing_with_variations(
+    client: EtsyClient,
+    product: Product,
+    session: "Session",
+    shipping_profile_id: int,
+    return_policy_id: int,
+) -> str:
+    """Create the listing using the operational-integration payload builder."""
+    from src.modules.etsy.payload_builder import EtsyListingPayloadBuilder
+
+    builder = EtsyListingPayloadBuilder(session)
+    payload = builder.build(product)
+
+    # Etsy split: variation inventory travels through the separate inventory
+    # endpoint, so pop it before the create-listing call.
+    inventory = payload.pop("inventory", None)
+    payload.setdefault("shipping_profile_id", shipping_profile_id)
+    payload["return_policy_id"] = return_policy_id
+    payload["taxonomy_id"] = JEWELRY_NECKLACE_TAXONOMY_ID
+    # First offering price becomes the top-level list price (Etsy requires it).
+    if inventory and inventory.get("products"):
+        first_price = inventory["products"][0]["offerings"][0]["price"]
+        payload.setdefault("price", first_price)
+        payload.setdefault("quantity", inventory["products"][0]["offerings"][0]["quantity"])
+
+    resp = await client.post(
+        f"/application/shops/{client.shop_id}/listings",
+        json=payload,
+    )
+    listing_id = str(resp["listing_id"])
+    _log.info(
+        "Draft listing (variation) created",
+        sku=product.sku,
+        listing_id=listing_id,
+        variation_count=len(inventory.get("products", [])) if inventory else 0,
+    )
+
+    if inventory and inventory.get("products"):
+        try:
+            await client.update_inventory(listing_id, inventory)
+        except Exception as exc:  # pragma: no cover — network path
+            _log.exception(
+                "inventory_upload_failed",
+                sku=product.sku,
+                listing_id=listing_id,
+                error=str(exc),
+            )
+
     return listing_id
 
 
@@ -203,7 +266,7 @@ async def publish_product(
     )
 
     listing_id = await create_listing(
-        client, product, shipping_profile_id, return_policy_id
+        client, product, shipping_profile_id, return_policy_id, session=session
     )
     await upload_images(client, listing_id, images)
     await set_attributes(client, listing_id, product)
