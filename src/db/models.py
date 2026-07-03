@@ -516,6 +516,9 @@ class ShopSettings(Base):
     # Image workflow mode: "jewelry_9" (3 mannequin + 3 concept + 3 chart) or "legacy" (5 lifestyle)
     image_workflow_mode = Column(String(20), default="jewelry_9")
 
+    # Auto-create a ShopSection the first time a listing is built for a new pillar (PR 6)
+    auto_create_sections = Column(Boolean, default=True)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 

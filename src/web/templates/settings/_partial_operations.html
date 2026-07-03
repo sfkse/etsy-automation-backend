@@ -49,6 +49,13 @@
       <label class="form-check-label" for="op-omit-karat">Omit karat text in titles</label>
     </div>
   </div>
+  <div class="col-md-6">
+    <div class="form-check mt-4">
+      {% set auto_sections = op.auto_create_sections if op.auto_create_sections is not none else true %}
+      <input type="checkbox" name="auto_create_sections" class="form-check-input" id="op-auto-sections" {% if auto_sections %}checked{% endif %}>
+      <label class="form-check-label" for="op-auto-sections">Auto-create shop sections on first Build</label>
+    </div>
+  </div>
   <div class="col-12">
     <button type="submit" class="btn btn-primary">Save Operations</button>
   </div>

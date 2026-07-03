@@ -23,6 +23,7 @@ from typing import Optional
 
 import structlog
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.db.models import (
@@ -31,6 +32,7 @@ from src.db.models import (
     PersonalizationTemplate,
     Product,
     ProductStatus,
+    ShopSection,
     ShopSettings,
     VariationPreset,
     VariationRow,
@@ -43,6 +45,18 @@ from src.modules.listings.variation_builder import VariationMatrixBuilder
 from src.sourcing.rexven_scraper import scrape_rexven_product
 
 _log = structlog.get_logger(__name__)
+
+
+# Carrier-pillar → default section name (PR 6). Values that fall through
+# use ``pillar.title()`` — see ``ListingBuilder._ensure_shop_section``.
+_PILLAR_TO_SECTION_NAME: dict[str, str] = {
+    "cross": "Cross Necklace",
+    "name": "Name Necklace",
+    "birthstone": "Birthstone Necklace",
+    "birth_flower": "Birth Flower Necklace",
+    "pet": "Pet Memorial Jewelry",
+    "pendant": "Pendant Necklace",
+}
 
 
 class ListingBuildRequest(BaseModel):
@@ -145,6 +159,8 @@ class ListingBuilder:
 
         self.session.commit()
 
+        self._ensure_shop_section(product, settings)
+
         _log.info(
             "listing_builder_created",
             sku=product.sku,
@@ -158,6 +174,48 @@ class ListingBuilder:
 
     def _load_settings(self) -> Optional[ShopSettings]:
         return self.session.query(ShopSettings).filter_by(id=1).first()
+
+    def _ensure_shop_section(
+        self,
+        product: Product,
+        settings: Optional[ShopSettings],
+    ) -> None:
+        """Idempotently create a ShopSection for the product's carrier pillar.
+
+        Guarded by ``ShopSettings.auto_create_sections`` (PR 6). Leaves
+        ``etsy_section_id`` NULL; the Etsy-side sync ships in PR 7.
+        """
+        if settings is None or not getattr(settings, "auto_create_sections", True):
+            return
+        pillar = product.carrier_pillar
+        if not pillar:
+            return
+
+        existing = (
+            self.session.query(ShopSection)
+            .filter_by(carrier_pillar=pillar)
+            .first()
+        )
+        if existing is not None:
+            return
+
+        name = _PILLAR_TO_SECTION_NAME.get(pillar) or pillar.replace("_", " ").title()
+        max_order = (
+            self.session.query(func.max(ShopSection.display_order)).scalar() or 0
+        )
+        section = ShopSection(
+            name=name,
+            carrier_pillar=pillar,
+            display_order=(max_order or 0) + 1,
+        )
+        self.session.add(section)
+        self.session.commit()
+        _log.info(
+            "shop_section_auto_created",
+            name=name,
+            carrier_pillar=pillar,
+            display_order=section.display_order,
+        )
 
     def _resolve_rexven(self, req: ListingBuildRequest) -> dict:
         """Return dict with keys: image_path, image_url, cost_cents, title_tr."""
