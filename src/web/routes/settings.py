@@ -319,12 +319,13 @@ class OperationsPatch(BaseModel):
     omit_karat_in_title: bool | None = None
     active_pillars: list[str] | None = None
     default_shipping_profile_id: str | None = None
+    image_workflow_mode: str | None = None
 
 
 _OPERATIONS_FIELDS = {
     "renewal_option", "return_policy_days", "feature_listing_default",
     "default_quantity", "omit_karat_in_title", "active_pillars",
-    "default_shipping_profile_id",
+    "default_shipping_profile_id", "image_workflow_mode",
 }
 
 

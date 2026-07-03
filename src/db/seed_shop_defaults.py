@@ -43,6 +43,7 @@ def seed_shop_settings(session: Session) -> None:
         feature_listing_default=False,
         default_quantity=999,
         omit_karat_in_title=True,
+        image_workflow_mode="jewelry_9",
     ))
     session.commit()
 

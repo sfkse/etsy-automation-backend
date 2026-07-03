@@ -16,15 +16,22 @@ from __future__ import annotations
 import asyncio
 import re
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image
 from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
-from src.db.models import Product, ProductImage, ProductStatus
+from src.db.models import Product, ProductImage, ProductStatus, ShopSettings
 from src.modules.images.alt_text import generate_alt_text
 from src.modules.images.base import ImageGenerationRequest, ImageGenerationResult
+from src.modules.images.cover_crop import auto_crop_cover_photo
 from src.modules.images.factory import ImageWorkflowFactory
+from src.modules.images.jewelry_set import (
+    ChartResult,
+    JewelryImageSet,
+    generate_jewelry_set,
+)
 from src.modules.images.preprocessing import preprocess_and_save
 from src.modules.sheets.sync import upsert_product_row
 from src.utils.logger import get_logger
@@ -79,8 +86,10 @@ async def run_image_pipeline(
 
     Steps:
       1. Preprocess (background removal)
-      2. Generate lifestyle images
-      3. Save files + DB records
+      2. Dispatch on ``ShopSettings.image_workflow_mode``:
+           - ``jewelry_9`` → 3 mannequin + 3 concept + 3 chart set
+           - otherwise    → legacy 5-lifestyle loop
+      3. Save files + DB records with rank ordering
       4. Assign alt text
     """
     sku = product.sku
@@ -106,7 +115,46 @@ async def run_image_pipeline(
     )
     logger.info("preprocessing_done", sku=sku, path=str(preprocessed_path))
 
-    # ── 2. Generate lifestyle images ──────────────────────────────────────────
+    shop_settings = session.query(ShopSettings).filter_by(id=1).first()
+    mode = getattr(shop_settings, "image_workflow_mode", None) or "jewelry_9"
+
+    if mode == "jewelry_9":
+        await _run_jewelry_9_pipeline(
+            product=product,
+            session=session,
+            settings=settings,
+            workflow_name=workflow_name,
+            preprocessed_path=preprocessed_path,
+            real_images=real_images,
+        )
+        product.status = ProductStatus.AWAITING_APPROVAL.value
+        session.commit()
+        upsert_product_row(product, settings)
+        logger.info("image_pipeline_done", sku=sku, mode=mode)
+        return
+
+    await _run_legacy_pipeline(
+        product=product,
+        session=session,
+        settings=settings,
+        workflow_name=workflow_name,
+        preprocessed_path=preprocessed_path,
+        real_images=real_images,
+    )
+
+
+async def _run_legacy_pipeline(
+    product: Product,
+    session: Session,
+    settings: Settings,
+    workflow_name: str,
+    preprocessed_path,
+    real_images: list[ProductImage],
+) -> None:
+    """The original 5-lifestyle pipeline, extracted verbatim for the
+    ``image_workflow_mode="legacy"`` branch."""
+    sku = product.sku
+
     reference_image = Image.open(preprocessed_path).convert("RGBA")
     generator = ImageWorkflowFactory.get(workflow_name, settings)
 
@@ -156,8 +204,119 @@ async def run_image_pipeline(
         if not img.alt_text:
             img.alt_text = generate_alt_text(product, img)
 
+    # ── 3. Assign alt text to real images ─────────────────────────────────────
+    for img in real_images:
+        if not img.alt_text:
+            img.alt_text = generate_alt_text(product, img)
+
     # ── 4. Advance status ─────────────────────────────────────────────────────
     product.status = ProductStatus.AWAITING_APPROVAL.value
     session.commit()
     upsert_product_row(product, settings)
     logger.info("image_pipeline_done", sku=sku, total_cost=total_cost)
+
+
+# ── Jewelry-9 (3 mannequin + 3 concept + 3 chart) ───────────────────────────
+
+
+def _save_ai_shot(
+    result: ImageGenerationResult,
+    output_path: Path,
+    apply_cover_crop: bool = False,
+) -> Path:
+    """Resize AI output to 2000x2000 and (optionally) auto-crop as cover."""
+    final = _resize_to_target(result.image)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    final.save(output_path, format="JPEG", quality=92)
+    if apply_cover_crop:
+        auto_crop_cover_photo(output_path, output_path, target_size=TARGET_SIZE)
+    return output_path
+
+
+async def _run_jewelry_9_pipeline(
+    product: Product,
+    session: Session,
+    settings: Settings,
+    workflow_name: str,
+    preprocessed_path,
+    real_images: list[ProductImage],
+) -> None:
+    """The 9-image jewelry set pipeline (PR 4).
+
+    Rank ordering (as specified in OPERATIONAL_INTEGRATION_FOLLOWUP.md):
+      1        cover photo (best mannequin, auto-cropped)
+      2..3     other mannequin shots
+      4..6     concept shots
+      7        size chart
+      8        birthstone chart (only if warranted)
+      9        care instructions chart
+    """
+    sku = product.sku
+    reference_image = Image.open(preprocessed_path).convert("RGBA")
+    ai_dir = Path(settings.IMAGES_DIR) / sku / "ai_generated"
+
+    jset: JewelryImageSet = await generate_jewelry_set(
+        product=product,
+        workflow=workflow_name,
+        session=session,
+        settings=settings,
+        reference_image=reference_image,
+        output_dir=ai_dir,
+    )
+
+    next_rank = 1
+
+    def _persist_ai(
+        result: ImageGenerationResult,
+        kind: str,
+        idx: int,
+        is_cover: bool,
+    ) -> None:
+        nonlocal next_rank
+        filename = f"{sku.lower()}-{kind}-{idx}.jpg"
+        path = ai_dir / filename
+        _save_ai_shot(result, path, apply_cover_crop=is_cover)
+        db_image = ProductImage(
+            product_id=product.id,
+            file_path=str(path),
+            rank=next_rank,
+            is_real=False,
+            workflow_source=workflow_name,
+            is_selected=is_cover,
+        )
+        session.add(db_image)
+        session.flush()
+        db_image.alt_text = generate_alt_text(product, db_image)
+        next_rank += 1
+
+    for i, shot in enumerate(jset.mannequin_shots, start=1):
+        _persist_ai(shot, "mannequin", i, is_cover=(i == 1))
+
+    for i, shot in enumerate(jset.concept_shots, start=1):
+        _persist_ai(shot, "concept", i, is_cover=False)
+
+    def _persist_chart(chart: Optional[ChartResult]) -> None:
+        nonlocal next_rank
+        if chart is None:
+            return
+        db_image = ProductImage(
+            product_id=product.id,
+            file_path=chart.file_path,
+            rank=next_rank,
+            is_real=False,
+            workflow_source=f"chart:{chart.kind}",
+            is_selected=False,
+        )
+        session.add(db_image)
+        session.flush()
+        db_image.alt_text = generate_alt_text(product, db_image)
+        next_rank += 1
+
+    _persist_chart(jset.size_chart)
+    _persist_chart(jset.birthstone_chart)
+    _persist_chart(jset.care_instructions_chart)
+
+    # ── Alt text for real images (preserved from legacy behaviour) ────────
+    for img in real_images:
+        if not img.alt_text:
+            img.alt_text = generate_alt_text(product, img)
