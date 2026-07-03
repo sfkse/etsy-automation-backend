@@ -128,191 +128,198 @@ class MiniPhase1Runner:
             resp = client.get(_ETSY_SEARCH_URL, params=params)
             resp.raise_for_status()
 
-        cards = self._parse_next_data(resp.text, keyword)
+        cards = parse_next_data(resp.text, keyword=keyword)
         if not cards:
             _log.warning("mini_phase1_no_cards", keyword=keyword)
             return []
 
         listings = []
         for rank, card in enumerate(cards[:_LISTINGS_PER_KEYWORD], start=1):
-            listing = self._card_to_listing(card, keyword, rank, analysis.id)
-            if listing:
-                # Upsert by listing_id
-                existing = (
-                    self.session.query(CompetitorListing)
-                    .filter_by(listing_id=listing.listing_id)
-                    .first()
-                )
-                if existing:
-                    listings.append(existing)
-                else:
-                    self.session.add(listing)
-                    listings.append(listing)
+            data = card_to_listing_dict(card, keyword, rank)
+            if not data:
+                continue
+            existing = (
+                self.session.query(CompetitorListing)
+                .filter_by(listing_id=data["listing_id"])
+                .first()
+            )
+            if existing:
+                listings.append(existing)
+                continue
+
+            listing = CompetitorListing(
+                **data,
+                scraped_for_sourcing=True,
+                sourcing_analysis_id=analysis.id,
+                imported_at=datetime.utcnow(),
+            )
+            self.session.add(listing)
+            listings.append(listing)
 
         self.session.commit()
         _log.info("mini_phase1_scraped", keyword=keyword, count=len(listings))
         return listings
 
-    def _parse_next_data(self, html: str, keyword: str) -> list[dict]:
-        """
-        Extract listing cards from Etsy's embedded __NEXT_DATA__ JSON.
-        Returns list of raw card dicts; empty list if parse fails.
-        """
-        match = re.search(
-            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
-            html,
-            re.DOTALL,
-        )
-        if not match:
-            _log.warning("mini_phase1_no_next_data", keyword=keyword)
-            return self._fallback_parse(html, keyword)
+# ── Module-level pure helpers ─────────────────────────────────────────────────
+# Shared by MiniPhase1Runner and web/routes/research.py's /research/quick-scrape
+# endpoint (PR 5). Do not depend on ORM or session.
 
-        try:
-            data: dict = json.loads(match.group(1))
-        except json.JSONDecodeError as e:
-            _log.warning("mini_phase1_json_parse_failed", keyword=keyword, error=str(e))
-            return []
 
-        # Navigate the NEXT_DATA tree to find listing cards
-        # Etsy's structure varies; we try common paths
-        cards = self._extract_cards_from_next_data(data)
-        return cards
+def parse_next_data(html: str, *, keyword: str | None = None) -> list[dict]:
+    """
+    Extract listing cards from Etsy's embedded ``__NEXT_DATA__`` JSON.
+    Returns a list of raw card dicts; empty list if parse fails. Falls
+    back to href-pattern scraping when the JSON blob is missing.
 
-    def _extract_cards_from_next_data(self, data: dict) -> list[dict]:
-        """Walk __NEXT_DATA__ to find listing card arrays."""
-        # Try common paths in Etsy's NEXT_DATA structure
-        paths = [
-            ["props", "pageProps", "results"],
-            ["props", "pageProps", "initialData", "results"],
-            ["props", "pageProps", "initialProps", "results"],
-        ]
-        for path in paths:
-            node = data
-            for key in path:
-                if isinstance(node, dict):
-                    node = node.get(key)
-                else:
-                    node = None
-                    break
-            if isinstance(node, list) and node:
-                return node
+    ``keyword`` is used only for log context.
+    """
+    match = re.search(
+        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+        html,
+        re.DOTALL,
+    )
+    if not match:
+        _log.warning("mini_phase1_no_next_data", keyword=keyword)
+        return _fallback_parse_html(html)
 
-        # Deep search for listing arrays
-        return self._deep_search_listings(data)
-
-    def _deep_search_listings(self, obj: Any, depth: int = 0) -> list[dict]:
-        """Recursively search for a list that looks like Etsy listing cards."""
-        if depth > 8:
-            return []
-        if isinstance(obj, list) and len(obj) >= 5:
-            # Check if items look like listing cards
-            if obj and isinstance(obj[0], dict):
-                first = obj[0]
-                if any(k in first for k in ("listing_id", "listingId", "id", "url")):
-                    return obj
-        if isinstance(obj, dict):
-            for value in obj.values():
-                result = self._deep_search_listings(value, depth + 1)
-                if result:
-                    return result
+    try:
+        data: dict = json.loads(match.group(1))
+    except json.JSONDecodeError as e:
+        _log.warning("mini_phase1_json_parse_failed", keyword=keyword, error=str(e))
         return []
 
-    def _fallback_parse(self, html: str, keyword: str) -> list[dict]:
-        """
-        Fallback: extract listing IDs from href patterns in raw HTML.
-        Returns minimal card dicts with just listing_id and url.
-        """
-        pattern = re.compile(
-            r'href=["\']https://www\.etsy\.com/listing/(\d{8,12})/([^"\'?\s]+)'
-        )
-        seen: set[str] = set()
-        cards = []
-        for m in pattern.finditer(html):
-            listing_id = m.group(1)
-            slug = m.group(2)
-            if listing_id not in seen:
-                seen.add(listing_id)
-                cards.append({
-                    "listing_id": listing_id,
-                    "url": f"https://www.etsy.com/listing/{listing_id}/{slug}",
-                    "title": slug.replace("-", " "),
-                })
-        return cards[:_LISTINGS_PER_KEYWORD]
+    return _extract_cards_from_next_data(data)
 
-    def _card_to_listing(
-        self,
-        card: dict,
-        keyword: str,
-        rank: int,
-        analysis_id: int,
-    ) -> CompetitorListing | None:
-        """Convert a raw card dict to a CompetitorListing ORM object."""
-        # Handle different key naming conventions (camelCase vs snake_case)
-        listing_id = str(
-            card.get("listing_id")
-            or card.get("listingId")
-            or card.get("id")
-            or ""
-        ).strip()
-        if not listing_id:
-            return None
 
-        url = card.get("url") or f"https://www.etsy.com/listing/{listing_id}"
-
-        # Price (may be in cents or dollars)
-        price_cents: int | None = None
-        raw_price = card.get("price") or card.get("price_cents") or card.get("listingPrice")
-        if raw_price:
-            if isinstance(raw_price, dict):
-                # Etsy price object: {"amount": 1199, "divisor": 100, ...}
-                amount = raw_price.get("amount") or raw_price.get("value", 0)
-                divisor = raw_price.get("divisor", 100)
-                try:
-                    price_cents = int(float(amount) / divisor * 100)
-                except (ValueError, TypeError, ZeroDivisionError):
-                    pass
+def _extract_cards_from_next_data(data: dict) -> list[dict]:
+    paths = [
+        ["props", "pageProps", "results"],
+        ["props", "pageProps", "initialData", "results"],
+        ["props", "pageProps", "initialProps", "results"],
+    ]
+    for path in paths:
+        node: Any = data
+        for key in path:
+            if isinstance(node, dict):
+                node = node.get(key)
             else:
-                try:
-                    price_cents = int(float(str(raw_price).replace(",", ".")))
-                except (ValueError, TypeError):
-                    pass
+                node = None
+                break
+        if isinstance(node, list) and node:
+            return node
 
-        # Shop info
-        shop_name = (
-            card.get("shop_name")
-            or card.get("shopName")
-            or (card.get("shop") or {}).get("name")
+    return _deep_search_listings(data)
+
+
+def _deep_search_listings(obj: Any, depth: int = 0) -> list[dict]:
+    if depth > 8:
+        return []
+    if isinstance(obj, list) and len(obj) >= 5:
+        if obj and isinstance(obj[0], dict):
+            first = obj[0]
+            if any(k in first for k in ("listing_id", "listingId", "id", "url")):
+                return obj
+    if isinstance(obj, dict):
+        for value in obj.values():
+            result = _deep_search_listings(value, depth + 1)
+            if result:
+                return result
+    return []
+
+
+def _fallback_parse_html(html: str) -> list[dict]:
+    """Extract listing IDs from href patterns as a last-resort fallback."""
+    pattern = re.compile(
+        r'href=["\']https://www\.etsy\.com/listing/(\d{8,12})/([^"\'?\s]+)'
+    )
+    seen: set[str] = set()
+    cards: list[dict] = []
+    for m in pattern.finditer(html):
+        listing_id = m.group(1)
+        slug = m.group(2)
+        if listing_id in seen:
+            continue
+        seen.add(listing_id)
+        cards.append({
+            "listing_id": listing_id,
+            "url": f"https://www.etsy.com/listing/{listing_id}/{slug}",
+            "title": slug.replace("-", " "),
+        })
+    return cards[:_LISTINGS_PER_KEYWORD]
+
+
+def card_to_listing_dict(card: dict, keyword: str, rank: int) -> dict | None:
+    """
+    Convert a raw Etsy ``__NEXT_DATA__`` card dict to a plain dict shaped
+    like the ``CompetitorListing`` columns. Returns ``None`` for cards we
+    can't identify. Callers add ORM-only fields (``imported_at``,
+    ``sourcing_analysis_id``) themselves.
+    """
+    listing_id = str(
+        card.get("listing_id")
+        or card.get("listingId")
+        or card.get("id")
+        or ""
+    ).strip()
+    if not listing_id:
+        return None
+
+    url = card.get("url") or f"https://www.etsy.com/listing/{listing_id}"
+
+    price_cents: int | None = None
+    raw_price = card.get("price") or card.get("price_cents") or card.get("listingPrice")
+    if raw_price:
+        if isinstance(raw_price, dict):
+            amount = raw_price.get("amount") or raw_price.get("value", 0)
+            divisor = raw_price.get("divisor", 100)
+            try:
+                price_cents = int(float(amount) / divisor * 100)
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+        else:
+            try:
+                price_cents = int(float(str(raw_price).replace(",", ".")))
+            except (ValueError, TypeError):
+                pass
+
+    shop_name = (
+        card.get("shop_name")
+        or card.get("shopName")
+        or (card.get("shop") or {}).get("name")
+        or ""
+    )
+    shop_id = str(
+        card.get("shop_id")
+        or card.get("shopId")
+        or (card.get("shop") or {}).get("shop_id")
+        or ""
+    )
+
+    total_results = card.get("keyword_total_results") or card.get("numFound")
+
+    return {
+        "listing_id": listing_id,
+        "url": url,
+        "keyword_searched": keyword,
+        "rank_in_search": rank,
+        "title": card.get("title") or card.get("listingTitle") or "",
+        "image_url": (
+            card.get("image_url")
+            or card.get("imageUrl")
+            or card.get("main_image")
             or ""
-        )
-        shop_id = str(
-            card.get("shop_id")
-            or card.get("shopId")
-            or (card.get("shop") or {}).get("shop_id")
-            or ""
-        )
+        ),
+        "shop_name": shop_name or None,
+        "shop_id": shop_id or None,
+        "price_cents": price_cents,
+        "is_bestseller": bool(card.get("is_bestseller") or card.get("isBestseller")),
+        "is_star_seller": bool(card.get("is_star_seller") or card.get("isStarSeller")),
+        "keyword_total_results": total_results,
+    }
 
-        # Total search results (keyword volume proxy)
-        total_results = card.get("keyword_total_results") or card.get("numFound")
 
-        return CompetitorListing(
-            listing_id=listing_id,
-            url=url,
-            keyword_searched=keyword,
-            rank_in_search=rank,
-            title=card.get("title") or card.get("listingTitle") or "",
-            image_url=(
-                card.get("image_url")
-                or card.get("imageUrl")
-                or card.get("main_image")
-                or ""
-            ),
-            shop_name=shop_name or None,
-            shop_id=shop_id or None,
-            price_cents=price_cents,
-            is_bestseller=bool(card.get("is_bestseller") or card.get("isBestseller")),
-            is_star_seller=bool(card.get("is_star_seller") or card.get("isStarSeller")),
-            keyword_total_results=total_results,
-            scraped_for_sourcing=True,
-            sourcing_analysis_id=analysis_id,
-            imported_at=datetime.utcnow(),
-        )
+__all__ = [
+    "MiniPhase1Runner",
+    "parse_next_data",
+    "card_to_listing_dict",
+]

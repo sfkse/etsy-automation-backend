@@ -14,12 +14,14 @@ from __future__ import annotations
 import io
 from urllib.parse import unquote
 
+import httpx
 import pandas as pd
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy import distinct
 from sqlalchemy.orm import Session
 
@@ -34,6 +36,12 @@ from src.modules.research.csv_import import merge_listing, parse_csv_to_listings
 from src.modules.research.pipeline import refresh_keyword_research
 from src.modules.research.scoring import compute_sales_signal_score
 from src.modules.research.shop_classifier import upsert_competitor_shop
+from src.sourcing.mini_phase1 import (
+    _ETSY_SEARCH_URL,
+    _HEADERS,
+    card_to_listing_dict,
+    parse_next_data,
+)
 from src.utils.llm_client import get_llm_client
 
 router = APIRouter(prefix="/research", tags=["research"])
@@ -225,3 +233,49 @@ async def refresh_keyword(
     llm_client = get_llm_client()
     await refresh_keyword_research(session, keyword, llm_client)
     return RedirectResponse(url=f"/research/{keyword_slug}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Quick-scrape (PR 5) — used by the Chrome extension's Title Helper tab
+# ---------------------------------------------------------------------------
+
+
+class QuickScrapeRequest(BaseModel):
+    keyword: str
+    limit: int = 20
+
+
+@router.post("/quick-scrape")
+async def quick_scrape(payload: QuickScrapeRequest) -> JSONResponse:
+    """Lightweight top-N Etsy search scrape — no DB writes, no analyzers.
+
+    Reuses the parsing helpers exported by ``src.sourcing.mini_phase1`` so
+    the extension gets the same card shape used by the full sourcing
+    pipeline.
+    """
+    keyword = payload.keyword.strip()
+    if not keyword:
+        return JSONResponse({"error": "keyword required"}, status_code=422)
+
+    limit = max(1, min(payload.limit, 40))
+    params = {"q": keyword, "explicit": "1", "ref": "pagination"}
+
+    async with httpx.AsyncClient(
+        headers=_HEADERS, follow_redirects=True, timeout=15
+    ) as client:
+        resp = await client.get(_ETSY_SEARCH_URL, params=params)
+
+    if resp.status_code >= 400:
+        return JSONResponse(
+            {"error": f"upstream status {resp.status_code}"},
+            status_code=502,
+        )
+
+    cards = parse_next_data(resp.text, keyword=keyword)
+    listings: list[dict] = []
+    for rank, card in enumerate(cards[:limit], start=1):
+        row = card_to_listing_dict(card, keyword, rank)
+        if row:
+            listings.append(row)
+
+    return JSONResponse({"listings": listings})

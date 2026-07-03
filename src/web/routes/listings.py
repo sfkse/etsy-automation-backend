@@ -19,6 +19,7 @@ from src.modules.listings.orchestrator import (
     ListingBuilder,
     run_listing_content_pipeline,
 )
+from src.modules.listings.personalization_picker import PersonalizationPicker
 
 _log = structlog.get_logger(__name__)
 
@@ -72,6 +73,21 @@ async def build_status(
         "sku": sku,
         "status": product.status,
         "redirect": redirect,
+    })
+
+
+@router.get("/personalization-options")
+async def personalization_options() -> JSONResponse:
+    """Enumerate the user-facing personalization labels.
+
+    Used by the Chrome extension's Listing Builder tab (PR 5) so the form
+    stays in sync with ``PersonalizationPicker.USER_FACING_OPTIONS``.
+    """
+    return JSONResponse({
+        "options": [
+            {"label": label, "signature": signature}
+            for label, signature in PersonalizationPicker.USER_FACING_OPTIONS
+        ]
     })
 
 
