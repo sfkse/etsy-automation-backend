@@ -16,6 +16,7 @@ import json
 
 import structlog
 from fastapi import APIRouter, Depends, Form, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -27,10 +28,12 @@ from src.modules.approval.service import (
     approve_variant,
     get_approval_queue,
     get_variant_by_id,
+    get_variation_matrix,
     reject_and_regenerate,
     update_variant_field,
     validate_field,
 )
+from src.modules.etsy.payload_builder import EtsyListingPayloadBuilder
 
 _log = structlog.get_logger(__name__)
 
@@ -128,6 +131,12 @@ async def approval_detail(
     variants = product.generated_variants or []
     selected_id = product.selected_variant_id or (variants[0]["id"] if variants else "A")
 
+    variations = (
+        get_variation_matrix(session, product.id)
+        if product.variation_preset_id is not None
+        else []
+    )
+
     return _tmpl(
         "approval/detail.html",
         request,
@@ -136,11 +145,33 @@ async def approval_detail(
             "variants": variants,
             "selected_id": selected_id,
             "images": images,
+            "variations": variations,
             "ctr_badge": CTR_BADGE,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
         },
     )
+
+
+# ── Etsy payload preview (JSON) ───────────────────────────────────────────────
+
+@router.get("/{sku}/payload-preview")
+async def payload_preview(
+    sku: str,
+    variant_id: str = "",
+    session: Session = Depends(get_session),
+):
+    """Return the Etsy v3 payload that would be sent for this product / variant.
+
+    Lazy-loaded by the approval detail page's <details> block.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    chosen = get_variant_by_id(product, variant_id) if variant_id else None
+    payload = EtsyListingPayloadBuilder(session).build(product, chosen)
+    return JSONResponse(jsonable_encoder(payload))
 
 
 # ── Approve selected variant ──────────────────────────────────────────────────

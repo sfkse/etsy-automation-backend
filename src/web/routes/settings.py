@@ -21,17 +21,21 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from src.config.business_rules import CARRIER_PILLARS
 from src.db.dependencies import get_session
 from src.db.models import (
     DefaultAttributes,
     DescriptionTemplate,
+    MaterialType,
     PersonalizationTemplate,
     PricingStrategy,
+    RenewalOption,
     ShopSection,
     ShopSettings,
     VariationPreset,
@@ -40,6 +44,12 @@ from src.db.models import (
 _log = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+templates: Jinja2Templates | None = None
+
+
+def set_templates(t: Jinja2Templates) -> None:
+    global templates
+    templates = t
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -371,3 +381,67 @@ def delete_shop_section(name: str, session: Session = Depends(get_session)):
     session.delete(row)
     session.commit()
     return JSONResponse({"status": "deleted"})
+
+
+# ── HTML tabbed editor ───────────────────────────────────────────────────────
+
+
+def _load_all_tabs(session: Session) -> dict:
+    """Pre-fetch every tab's data in a single request so /settings is one round-trip."""
+    settings_row = _get_or_create_settings(session)
+    pricing_row = _get_or_create_pricing(session)
+
+    partner_fields = {
+        "production_partner_id",
+        "production_partner_name",
+        "production_partner_about",
+        "production_partner_location",
+        "production_partner_q1",
+        "production_partner_q2",
+        "production_partner_q3",
+    }
+    return {
+        "production_partner": {k: getattr(settings_row, k) for k in partner_fields},
+        "description_templates": [
+            _row_to_dict(r) for r in session.query(DescriptionTemplate).all()
+        ],
+        "default_attributes": [
+            _row_to_dict(r) for r in session.query(DefaultAttributes).all()
+        ],
+        "variation_presets": [
+            _row_to_dict(r)
+            for r in session.query(VariationPreset).order_by(VariationPreset.name).all()
+        ],
+        "pricing_strategy": _row_to_dict(pricing_row),
+        "personalization_library": [
+            _row_to_dict(r)
+            for r in session.query(PersonalizationTemplate)
+            .order_by(PersonalizationTemplate.name)
+            .all()
+        ],
+        "operations": {k: getattr(settings_row, k) for k in _OPERATIONS_FIELDS},
+        "shop_sections": [
+            _row_to_dict(r)
+            for r in session.query(ShopSection)
+            .order_by(ShopSection.display_order, ShopSection.name)
+            .all()
+        ],
+    }
+
+
+@router.get("", response_class=HTMLResponse)
+def settings_index(request: Request, session: Session = Depends(get_session)):
+    """Tabbed HTML editor over the 8 JSON tabs (PR 3)."""
+    if templates is None:
+        raise HTTPException(status_code=500, detail="templates not configured")
+    tabs = _load_all_tabs(session)
+    return templates.TemplateResponse(
+        request,
+        "settings/index.html",
+        {
+            "tabs": tabs,
+            "carrier_pillars": CARRIER_PILLARS,
+            "material_types": [e.value for e in MaterialType],
+            "renewal_options": [e.value for e in RenewalOption],
+        },
+    )

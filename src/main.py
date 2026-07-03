@@ -101,6 +101,7 @@ approval_routes.set_templates(templates)
 etsy_routes.set_templates(templates)
 dashboard_routes.set_templates(templates)
 admin_routes.set_templates(templates)
+settings_routes.set_templates(templates)
 
 app.include_router(research_routes.router)
 app.include_router(input_routes.router)

@@ -1,0 +1,82 @@
+{% set defaults_list = tabs.default_attributes %}
+<div class="accordion" id="defaultAttributesAccordion">
+  {% for d in defaults_list %}
+  {% set slug = d.category | replace(' ', '-') %}
+  <div class="accordion-item">
+    <h2 class="accordion-header">
+      <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button"
+              data-bs-toggle="collapse" data-bs-target="#da-{{ slug }}">
+        {{ d.category }}
+      </button>
+    </h2>
+    <div id="da-{{ slug }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+         data-bs-parent="#defaultAttributesAccordion">
+      <div class="accordion-body">
+        <form class="settings-form row g-3" data-settings-endpoint="/settings/default-attributes/{{ d.category }}">
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Style</label>
+            <input type="text" name="style" class="form-control" value="{{ d.style or '' }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Theme</label>
+            <input type="text" name="theme" class="form-control" value="{{ d.theme or '' }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Holiday default</label>
+            <input type="text" name="holiday_default" class="form-control" value="{{ d.holiday_default or '' }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Sustainability</label>
+            <input type="text" name="sustainability" class="form-control" value="{{ d.sustainability or '' }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Chain style</label>
+            <input type="text" name="chain_style" class="form-control" value="{{ d.chain_style or '' }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small text-muted">Default occasion</label>
+            <input type="text" name="default_occasion" class="form-control" value="{{ d.default_occasion or '' }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small text-muted">Default recipients (comma-separated)</label>
+            <input type="text" name="default_recipients" class="form-control" data-array="csv"
+                   value="{{ (d.default_recipients or []) | join(', ') }}">
+          </div>
+          <div class="col-md-3">
+            <div class="form-check mt-4">
+              <input type="checkbox" name="adjustable" class="form-check-input" id="da-adj-{{ slug }}" {% if d.adjustable %}checked{% endif %}>
+              <label class="form-check-label" for="da-adj-{{ slug }}">Adjustable</label>
+            </div>
+          </div>
+          <div class="col-md-3">
+            <div class="form-check mt-4">
+              <input type="checkbox" name="convertible" class="form-check-input" id="da-conv-{{ slug }}" {% if d.convertible %}checked{% endif %}>
+              <label class="form-check-label" for="da-conv-{{ slug }}">Convertible</label>
+            </div>
+          </div>
+          <div class="col-12">
+            <button type="submit" class="btn btn-primary btn-sm">Save {{ d.category }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="text-muted small p-3">No default-attribute rows yet.</div>
+  {% endfor %}
+</div>
+
+<details class="mt-3">
+  <summary class="fw-semibold small text-muted mb-2" style="cursor:pointer;">+ Add category</summary>
+  <form class="settings-form row g-2 mt-2" data-settings-endpoint-template="/settings/default-attributes/{name}" data-settings-name-field="category">
+    <div class="col-md-3">
+      <input type="text" name="category" class="form-control form-control-sm" placeholder="e.g. bracelet" required>
+    </div>
+    <div class="col-md-3">
+      <input type="text" name="style" class="form-control form-control-sm" placeholder="Style">
+    </div>
+    <div class="col-md-2">
+      <button type="submit" class="btn btn-sm btn-success">Add</button>
+    </div>
+  </form>
+</details>

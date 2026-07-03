@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Settings — Etsy Automation{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-0">Shop Settings</h2>
+    <p class="text-muted mb-0 small">Edit the shop-wide configuration used by the Listing Builder and Etsy publisher.</p>
+  </div>
+  <div id="settings-toast-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1080;"></div>
+</div>
+
+<ul class="nav nav-tabs" id="settingsTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-production-partner" type="button" role="tab">Production Partner</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-description-templates" type="button" role="tab">Description Templates</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-default-attributes" type="button" role="tab">Default Attributes</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-variation-presets" type="button" role="tab">Variation Presets</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-pricing-strategy" type="button" role="tab">Pricing Strategy</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-personalization" type="button" role="tab">Personalization</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-operations" type="button" role="tab">Operations</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-shop-sections" type="button" role="tab">Shop Sections</button>
+  </li>
+</ul>
+
+<div class="tab-content bg-white border border-top-0 rounded-bottom p-4 mb-5">
+  <div class="tab-pane fade show active" id="tab-production-partner" role="tabpanel">
+    {% include "settings/_partial_production_partner.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-description-templates" role="tabpanel">
+    {% include "settings/_partial_description_templates.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-default-attributes" role="tabpanel">
+    {% include "settings/_partial_default_attributes.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-variation-presets" role="tabpanel">
+    {% include "settings/_partial_variation_presets.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-pricing-strategy" role="tabpanel">
+    {% include "settings/_partial_pricing_strategy.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-personalization" role="tabpanel">
+    {% include "settings/_partial_personalization_library.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-operations" role="tabpanel">
+    {% include "settings/_partial_operations.html" %}
+  </div>
+  <div class="tab-pane fade" id="tab-shop-sections" role="tabpanel">
+    {% include "settings/_partial_shop_sections.html" %}
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/settings.js"></script>
+<script src="/static/settings_pricing_preview.js"></script>
+{% endblock %}

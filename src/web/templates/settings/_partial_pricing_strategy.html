@@ -1,0 +1,70 @@
+{% set pr = tabs.pricing_strategy %}
+<form id="pricing-form" class="settings-form row g-3" data-settings-endpoint="/settings/pricing-strategy">
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Base multiplier</label>
+    <input type="number" step="0.01" name="base_multiplier" id="pf-base-multiplier"
+           class="form-control" value="{{ pr.base_multiplier if pr.base_multiplier is not none else 3.0 }}">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Length base (inches)</label>
+    <input type="number" step="0.5" name="length_base_inches" id="pf-length-base"
+           class="form-control" value="{{ pr.length_base_inches if pr.length_base_inches is not none else 18 }}">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Per-inch % (extra)</label>
+    <input type="number" step="0.1" name="length_price_per_extra_inch_pct" id="pf-per-inch-pct"
+           class="form-control" value="{{ pr.length_price_per_extra_inch_pct if pr.length_price_per_extra_inch_pct is not none else 3 }}">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Multi-count extra %</label>
+    <input type="number" step="0.1" name="multi_count_extra_pct"
+           class="form-control" value="{{ pr.multi_count_extra_pct if pr.multi_count_extra_pct is not none else 0 }}">
+  </div>
+
+  <div class="col-md-12">
+    <label class="form-label small text-muted">Finish offsets % (JSON)</label>
+    <textarea name="finish_offsets_pct" id="pf-finish-offsets" class="form-control font-monospace" rows="3" data-json="true">{{ (pr.finish_offsets_pct or {}) | tojson }}</textarea>
+    <div class="form-text">Example: <code>{"Gold": 0, "Silver": -5, "Rose Gold": 10}</code></div>
+  </div>
+
+  <div class="col-md-3">
+    <div class="form-check mt-4">
+      <input type="checkbox" name="loss_leader_enabled" class="form-check-input" id="pf-ll-enabled" {% if pr.loss_leader_enabled %}checked{% endif %}>
+      <label class="form-check-label" for="pf-ll-enabled">Loss leader enabled</label>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Loss-leader finish</label>
+    <input type="text" name="loss_leader_finish" class="form-control form-control-sm" value="{{ pr.loss_leader_finish or '' }}">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Loss-leader length</label>
+    <input type="number" step="0.5" name="loss_leader_length" class="form-control form-control-sm" value="{{ pr.loss_leader_length if pr.loss_leader_length is not none else '' }}">
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Loss-leader margin %</label>
+    <input type="number" step="0.1" name="loss_leader_margin_pct" class="form-control form-control-sm" value="{{ pr.loss_leader_margin_pct if pr.loss_leader_margin_pct is not none else '' }}">
+  </div>
+
+  <div class="col-12">
+    <button type="submit" class="btn btn-primary">Save Pricing Strategy</button>
+  </div>
+</form>
+
+<hr class="my-4">
+
+<h5 class="mb-2">Live preview</h5>
+<p class="text-muted small mb-2">Recomputes on every keystroke against a sample cost of
+  <input type="number" step="0.5" id="pp-cost" value="10" class="form-control form-control-sm d-inline-block" style="width:80px">
+  and finishes from your <em>finish_offsets_pct</em>.
+</p>
+<div class="table-responsive">
+  <table class="table table-sm table-bordered mb-0" id="pricing-preview-matrix">
+    <thead class="table-light">
+      <tr id="pp-header-row">
+        <th style="width:120px;">Finish \ Length</th>
+      </tr>
+    </thead>
+    <tbody id="pp-body"></tbody>
+  </table>
+</div>

@@ -1,0 +1,34 @@
+{% set pp = tabs.production_partner %}
+<form class="settings-form row g-3" data-settings-endpoint="/settings/production-partner">
+  <div class="col-md-6">
+    <label class="form-label small text-muted">Partner ID</label>
+    <input type="text" name="production_partner_id" class="form-control" value="{{ pp.production_partner_id or '' }}">
+  </div>
+  <div class="col-md-6">
+    <label class="form-label small text-muted">Partner Name</label>
+    <input type="text" name="production_partner_name" class="form-control" value="{{ pp.production_partner_name or '' }}">
+  </div>
+  <div class="col-md-6">
+    <label class="form-label small text-muted">Location</label>
+    <input type="text" name="production_partner_location" class="form-control" value="{{ pp.production_partner_location or '' }}">
+  </div>
+  <div class="col-md-6">
+    <label class="form-label small text-muted">About</label>
+    <input type="text" name="production_partner_about" class="form-control" value="{{ pp.production_partner_about or '' }}">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small text-muted">Q1 — Who is your partner?</label>
+    <textarea name="production_partner_q1" class="form-control" rows="3">{{ pp.production_partner_q1 or '' }}</textarea>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small text-muted">Q2 — Where do they operate?</label>
+    <textarea name="production_partner_q2" class="form-control" rows="3">{{ pp.production_partner_q2 or '' }}</textarea>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label small text-muted">Q3 — How do they help?</label>
+    <textarea name="production_partner_q3" class="form-control" rows="3">{{ pp.production_partner_q3 or '' }}</textarea>
+  </div>
+  <div class="col-12">
+    <button type="submit" class="btn btn-primary">Save Production Partner</button>
+  </div>
+</form>

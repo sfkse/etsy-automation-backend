@@ -115,6 +115,17 @@
 
         </div><!-- /card-body -->
 
+        <!-- Etsy Payload Preview (lazy-loaded) -->
+        <details class="payload-preview mx-3 mb-2" data-variant-id="{{ vid }}" data-loaded="false">
+          <summary class="small text-muted" style="cursor:pointer;">
+            <span class="text-uppercase fw-semibold" style="letter-spacing:.05em;">Etsy payload preview</span>
+            <span class="badge bg-light text-dark border ms-1">JSON</span>
+          </summary>
+          <pre class="border rounded p-2 mt-2 small bg-light"
+               id="payload-json-{{ vid }}"
+               style="max-height:340px; overflow:auto; font-size:.72rem; white-space:pre-wrap;">Loading…</pre>
+        </details>
+
         <div class="card-footer bg-white border-top py-2">
           <button type="button"
                   class="btn btn-sm btn-outline-secondary w-100 open-hybrid-btn"
@@ -126,6 +137,50 @@
     </div><!-- /col -->
     {% endfor %}
   </div><!-- /row -->
+
+
+  <!-- ── Variation Matrix Preview ───────────────────────────────────────────── -->
+  {% if variations %}
+  <div class="card border-0 shadow-sm mb-4" id="variation-matrix-panel">
+    <div class="card-header bg-white border-bottom d-flex align-items-center gap-2">
+      <span class="fw-semibold">Variation Matrix</span>
+      <span class="text-muted small">Finish × Length{% if variations[0].multi_count is not none %} × Count{% endif %} — {{ variations | length }} cells</span>
+      <span class="badge bg-light text-dark border ms-auto">Preset {{ product.variation_preset_id }}</span>
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-sm mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th scope="col">Finish</th>
+            <th scope="col">Length</th>
+            {% if variations[0].multi_count is not none %}<th scope="col">Count</th>{% endif %}
+            <th scope="col" class="text-end">Price</th>
+            <th scope="col">SKU suffix</th>
+            <th scope="col"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in variations %}
+          <tr class="{% if row.is_loss_leader %}table-warning{% endif %}">
+            <td>{{ row.finish }}</td>
+            <td>{% if row.length_inches is not none %}{{ row.length_inches }}"{% else %}—{% endif %}</td>
+            {% if variations[0].multi_count is not none %}
+            <td>{% if row.multi_count is not none %}{{ row.multi_count }}{% else %}—{% endif %}</td>
+            {% endif %}
+            <td class="text-end font-monospace">${{ '%.2f' | format(row.price_cents / 100.0) }}</td>
+            <td class="text-muted small font-monospace">{{ row.sku_suffix }}</td>
+            <td>
+              {% if row.is_loss_leader %}
+              <span class="badge bg-warning text-dark">◉ loss leader</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
 
 
   <!-- ── Shared Fields ──────────────────────────────────────────────────────── -->
@@ -707,6 +762,28 @@ document.getElementById('approve-form').addEventListener('submit', function(e) {
     });
     document.getElementById('overrides-json-input').value = JSON.stringify(overrides);
   }
+});
+
+
+// ── Etsy Payload Preview (lazy load on <details> open) ───────────────────────
+document.querySelectorAll('details.payload-preview').forEach(d => {
+  d.addEventListener('toggle', async () => {
+    if (!d.open || d.dataset.loaded === 'true') return;
+    const vid = d.dataset.variantId;
+    const pre = document.getElementById('payload-json-' + vid);
+    try {
+      const resp = await fetch(`/approval/${SKU}/payload-preview?variant_id=${encodeURIComponent(vid)}`);
+      if (!resp.ok) {
+        pre.textContent = `Error ${resp.status}: ${await resp.text()}`;
+        return;
+      }
+      const data = await resp.json();
+      pre.textContent = JSON.stringify(data, null, 2);
+      d.dataset.loaded = 'true';
+    } catch (e) {
+      pre.textContent = 'Failed to load: ' + e.message;
+    }
+  });
 });
 
 

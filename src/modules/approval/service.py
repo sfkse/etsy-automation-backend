@@ -18,7 +18,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
-from src.db.models import ApprovalOverride, Product, ProductStatus
+from src.db.models import ApprovalOverride, Product, ProductStatus, VariationRow
 from src.domain.validators import validate_tags, validate_title
 from src.modules.sheets.sync import upsert_product_row
 
@@ -41,6 +41,34 @@ def get_approval_queue(session: Session, sort: str = "newest") -> list[Product]:
     else:
         q = q.order_by(Product.created_at.desc())
     return q.all()
+
+
+# ── Variation matrix (for approval UI) ────────────────────────────────────────
+
+
+def get_variation_matrix(session: Session, product_id: int) -> list[dict]:
+    """Flattened Finish x Length x MultiCount rows for the approval detail UI."""
+    rows = (
+        session.query(VariationRow)
+        .filter_by(product_id=product_id)
+        .order_by(
+            VariationRow.finish,
+            VariationRow.length_inches,
+            VariationRow.multi_count,
+        )
+        .all()
+    )
+    return [
+        {
+            "finish": r.finish,
+            "length_inches": r.length_inches,
+            "multi_count": r.multi_count,
+            "price_cents": r.price_cents,
+            "sku_suffix": r.sku_suffix,
+            "is_loss_leader": r.is_loss_leader,
+        }
+        for r in rows
+    ]
 
 
 # ── Variant helpers ───────────────────────────────────────────────────────────
