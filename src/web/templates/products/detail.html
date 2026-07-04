@@ -85,6 +85,11 @@
     </form>
     {% endif %}
 
+    <form method="post" action="/products/{{ product.sku }}/delete" class="mt-1"
+          onsubmit="return confirm('Delete {{ product.sku }} and ALL its images? This cannot be undone.');">
+      <button type="submit" class="btn btn-sm btn-outline-danger">🗑 Delete product</button>
+    </form>
+
   </div>
 </div>
 

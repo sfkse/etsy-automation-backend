@@ -39,6 +39,7 @@
           <th class="text-end">Cost</th>
           <th class="text-end">Selling Price</th>
           <th>Created</th>
+          <th class="text-end">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -60,6 +61,12 @@
             {% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}
           </td>
           <td class="text-muted small">{{ product.created_at.strftime('%Y-%m-%d') if product.created_at else '—' }}</td>
+          <td class="text-end" onclick="event.stopPropagation();">
+            <form method="post" action="/products/{{ product.sku }}/delete" class="d-inline"
+                  onsubmit="return confirm('Delete {{ product.sku }} and ALL its images? This cannot be undone.');">
+              <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete product">Delete</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>

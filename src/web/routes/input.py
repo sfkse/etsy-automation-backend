@@ -12,6 +12,8 @@ GET  /products/{sku}/status  — JSON status endpoint for JS polling
 from __future__ import annotations
 
 import asyncio
+import shutil
+from pathlib import Path as _DeletePath
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -20,10 +22,25 @@ from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
 from src.db.dependencies import get_session
-from src.db.models import Product, ProductImage, ProductStatus
+from src.db.models import (
+    ApprovalOverride,
+    Product,
+    ProductImage,
+    ProductStats,
+    ProductStatus,
+    RenewLog,
+    VariationRow,
+)
 from src.domain.carrier_pillar import CarrierPillar
 from src.modules.images.comparison import run_comparison
 from src.modules.images.pipeline import run_image_pipeline
+from src.modules.images.regenerate import (
+    SLOTS,
+    generate_slot_candidates,
+    regenerate_slot,
+    select_candidate,
+    valid_slot,
+)
 from src.modules.input import generate_sku, save_product_images
 from src.modules.sheets.sync import upsert_product_row
 
@@ -420,3 +437,173 @@ async def product_status(
         "label": STATUS_LABELS.get(status, status),
         "redirect": redirect,
     })
+
+
+# ── Per-slot image management (regenerate / compare backends) ──────────────────
+
+_SLOT_ORDER = ["mannequin-1", "mannequin-2", "mannequin-3",
+               "concept-1", "concept-2", "concept-3"]
+
+
+def _slot_of(file_path: str) -> str | None:
+    """Derive the slot id (e.g. 'mannequin-1') from an AI image filename."""
+    name = file_path.rsplit("/", 1)[-1]
+    for slot in _SLOT_ORDER:
+        if name.endswith(f"-{slot}.jpg"):
+            return slot
+    return None
+
+
+@router.get("/{sku}/images", response_class=HTMLResponse)
+async def images_page(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Per-slot image manager: 6 photos, each regenerable / comparable."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/products", status_code=303)
+
+    rows = (
+        session.query(ProductImage)
+        .filter_by(product_id=product.id, is_real=False)
+        .all()
+    )
+    by_slot = {}
+    for r in rows:
+        slot = _slot_of(r.file_path or "")
+        if slot:
+            by_slot[slot] = r
+
+    slots = []
+    for slot in _SLOT_ORDER:
+        row = by_slot.get(slot)
+        url = None
+        if row and row.file_path:
+            url = "/images/" + row.file_path.split("data/images/")[-1]
+        slots.append({
+            "slot": slot,
+            "label": slot.replace("-", " ").title(),
+            "url": url,
+            "workflow": row.workflow_source if row else None,
+        })
+
+    return _tmpl(
+        "products/images.html", request,
+        {
+            "product": product,
+            "slots": slots,
+            "workflows": ["gemini", "openai", "flux"],
+            "status_labels": STATUS_LABELS,
+            "status_badge_class": STATUS_BADGE_CLASS,
+        },
+    )
+
+
+@router.post("/{sku}/images/regenerate")
+async def images_regenerate(
+    sku: str,
+    slot: str = Form(...),
+    workflow: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not valid_slot(slot):
+        return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
+    try:
+        row = await regenerate_slot(product, session, _settings, slot, workflow)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    url = "/images/" + row.file_path.split("data/images/")[-1]
+    return JSONResponse({
+        "slot": slot, "workflow": workflow, "url": url,
+        # cache-bust so the browser reloads the overwritten file
+        "cache_url": f"{url}?t={int(__import__('time').time())}",
+    })
+
+
+@router.post("/{sku}/images/compare")
+async def images_compare(
+    sku: str,
+    slot: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not valid_slot(slot):
+        return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
+    candidates = await generate_slot_candidates(product, session, _settings, slot)
+    return JSONResponse({
+        "slot": slot,
+        "candidates": [
+            {
+                "workflow": c.workflow,
+                "model_name": c.model_name,
+                "url": c.url,
+                "success": c.success,
+                "elapsed_seconds": c.elapsed_seconds,
+                "cost_estimate": c.cost_estimate,
+                "error": c.error,
+            }
+            for c in candidates
+        ],
+    })
+
+
+@router.post("/{sku}/images/select")
+async def images_select(
+    sku: str,
+    slot: str = Form(...),
+    workflow: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not valid_slot(slot):
+        return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
+    try:
+        row = select_candidate(product, session, _settings, slot, workflow)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    url = "/images/" + row.file_path.split("data/images/")[-1]
+    return JSONResponse({
+        "slot": slot, "workflow": workflow, "url": url,
+        "cache_url": f"{url}?t={int(__import__('time').time())}",
+    })
+
+
+# ── Delete a product and all connected assets ──────────────────────────────────
+
+@router.post("/{sku}/delete")
+async def delete_product(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """Permanently delete a product, its DB child rows, and its image files.
+
+    Removes: ProductImage, ProductStats, ApprovalOverride, RenewLog and
+    VariationRow rows, the Product itself, and the entire on-disk image
+    directory ``{IMAGES_DIR}/{sku}/`` (originals, preprocessed, ai_generated,
+    candidates, comparison, charts).
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/products", status_code=303)
+
+    pid = product.id
+    for model in (ProductImage, ProductStats, ApprovalOverride, RenewLog, VariationRow):
+        session.query(model).filter_by(product_id=pid).delete(synchronize_session=False)
+    session.delete(product)
+    session.commit()
+
+    # Remove image files on disk (best-effort — DB delete already committed).
+    img_dir = _DeletePath(_settings.IMAGES_DIR) / sku
+    if img_dir.exists():
+        shutil.rmtree(img_dir, ignore_errors=True)
+
+    return RedirectResponse(url="/products", status_code=303)

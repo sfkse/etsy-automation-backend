@@ -100,6 +100,18 @@ class EtsyClient:
         resp = await self.get(f"/application/shops/{self.shop_id}/sections")
         return resp.get("results", [])
 
+    async def create_shop_section(self, title: str) -> dict:
+        """Create a shop section on Etsy.
+
+        Etsy Open API v3 accepts `title` as a query-string parameter on
+        POST /application/shops/{shop_id}/shop-sections. Returns the created
+        section dict (includes `shop_section_id`).
+        """
+        return await self.post(
+            f"/application/shops/{self.shop_id}/shop-sections",
+            params={"title": title},
+        )
+
     async def get_taxonomy_attributes(self, taxonomy_id: int) -> list[dict]:
         resp = await self.get(
             f"/application/seller-taxonomy/nodes/{taxonomy_id}/properties"

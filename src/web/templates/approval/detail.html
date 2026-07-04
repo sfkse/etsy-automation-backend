@@ -193,8 +193,11 @@
 
         <!-- Images -->
         <div class="col-md-6">
-          <label class="fw-semibold small text-muted text-uppercase mb-2" style="letter-spacing:.05em;">
+          <label class="fw-semibold small text-muted text-uppercase mb-2 d-flex align-items-center gap-2" style="letter-spacing:.05em;">
             Product Images ({{ images | length }})
+            <a href="/products/{{ product.sku }}/images" class="text-decoration-none small text-primary text-lowercase">
+              regenerate / compare →
+            </a>
           </label>
           {% if images %}
           <div class="d-flex flex-wrap gap-2">
@@ -202,10 +205,11 @@
             <div class="rounded overflow-hidden border" style="width:64px;height:64px;flex-shrink:0;">
               {% if img.file_path %}
               {% set fname = img.file_path.split('/')[-1] %}
-              <div class="bg-light d-flex align-items-center justify-content-center w-100 h-100"
-                   style="font-size:.55rem;color:#999;text-align:center;padding:2px;word-break:break-all;">
-                {{ fname[:12] }}…
-              </div>
+              {% set img_url = '/images/' + img.file_path.split('data/images/')[-1] %}
+              <a href="{{ img_url }}" target="_blank" title="{{ fname }}">
+                <img src="{{ img_url }}" alt="{{ img.alt_text or fname }}" loading="lazy"
+                     class="w-100 h-100" style="object-fit:cover;">
+              </a>
               {% else %}
               <div class="bg-light w-100 h-100"></div>
               {% endif %}

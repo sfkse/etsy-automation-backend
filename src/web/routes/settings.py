@@ -40,6 +40,7 @@ from src.db.models import (
     ShopSettings,
     VariationPreset,
 )
+from src.modules.listings.reprice import reprice_all_preset_products
 
 _log = structlog.get_logger(__name__)
 
@@ -241,7 +242,12 @@ def save_variation_preset(
         session.add(row)
     _apply_updates(row, payload, _VARIATION_FIELDS)
     session.commit()
-    return _row_to_dict(row)
+    # Re-price products that use this preset so finish/length/multi-count edits
+    # propagate to their stored variation matrix + selling_price.
+    reprice = reprice_all_preset_products(session, preset_id=row.id)
+    result = _row_to_dict(row)
+    result["repriced"] = reprice
+    return result
 
 
 # ── 5. Pricing Strategy ──────────────────────────────────────────────────────
@@ -274,7 +280,12 @@ def save_pricing_strategy(payload: dict, session: Session = Depends(get_session)
     row = _get_or_create_pricing(session)
     _apply_updates(row, payload, _PRICING_FIELDS)
     session.commit()
-    return _row_to_dict(row)
+    # Re-price all preset-linked products so existing listings reflect the new
+    # strategy (manual products without a preset are left untouched).
+    reprice = reprice_all_preset_products(session)
+    result = _row_to_dict(row)
+    result["repriced"] = reprice
+    return result
 
 
 # ── 6. Personalization Library ───────────────────────────────────────────────
@@ -359,6 +370,41 @@ def list_shop_sections(session: Session = Depends(get_session)):
         .all()
     )
     return [_row_to_dict(r) for r in rows]
+
+
+@router.post("/shop-sections/sync")
+async def sync_shop_sections(session: Session = Depends(get_session)) -> dict:
+    """Push local ShopSection rows with etsy_section_id IS NULL to Etsy.
+
+    Idempotent: rows already synced (etsy_section_id set) are skipped by the
+    query filter, so re-running is safe. Errors on individual rows are
+    captured per-row so a single failure does not abort the whole sync.
+    """
+    from src.web.routes.etsy import _get_etsy_client
+
+    client = _get_etsy_client()
+    unsynced = (
+        session.query(ShopSection)
+        .filter(ShopSection.etsy_section_id.is_(None))
+        .order_by(ShopSection.display_order, ShopSection.name)
+        .all()
+    )
+    created: list[dict] = []
+    errors: list[dict] = []
+    for row in unsynced:
+        try:
+            resp = await client.create_shop_section(row.name)
+            row.etsy_section_id = str(resp.get("shop_section_id"))
+            created.append(
+                {"name": row.name, "etsy_section_id": row.etsy_section_id}
+            )
+        except Exception as exc:
+            _log.warning(
+                "shop_section_sync_failed", name=row.name, error=str(exc)
+            )
+            errors.append({"name": row.name, "error": str(exc)})
+    session.commit()
+    return {"created": created, "errors": errors}
 
 
 @router.post("/shop-sections/{name}")

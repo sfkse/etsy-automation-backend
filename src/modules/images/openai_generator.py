@@ -1,9 +1,10 @@
 """
 OpenAI image generator (Step 5.4).
-Uses gpt-image-1 via the images.edit endpoint for reference-based generation.
+Uses gpt-image-2 via the images.edit endpoint for reference-based generation.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 
@@ -27,9 +28,16 @@ class OpenAIImageGenerator(AbstractImageGenerator):
         request.reference_image.save(ref_bytes, format="PNG")
         ref_bytes.seek(0)
 
-        response = self.client.images.edit(
-            model="gpt-image-1",
-            image=ref_bytes,
+        # The OpenAI SDK call is synchronous/blocking — run it in a threadpool
+        # so it doesn't freeze the asyncio event loop (which would make the
+        # whole web server unresponsive during generation).
+        response = await asyncio.to_thread(
+            self.client.images.edit,
+            model="gpt-image-2",
+            # Pass a (filename, fileobj, mimetype) tuple so the API can detect
+            # the format — a bare BytesIO is sent as application/octet-stream
+            # and rejected with "unsupported mimetype".
+            image=("reference.png", ref_bytes, "image/png"),
             prompt=f"{request.prompt}. {request.style_hint}",
             n=request.num_outputs,
             size="1024x1024",
@@ -52,7 +60,7 @@ class OpenAIImageGenerator(AbstractImageGenerator):
 
     @property
     def model_name(self) -> str:
-        return "gpt-image-1"
+        return "gpt-image-2"
 
     @property
     def cost_per_image(self) -> float:

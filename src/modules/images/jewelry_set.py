@@ -38,21 +38,95 @@ if TYPE_CHECKING:  # pragma: no cover
     from src.config.settings import Settings
 
 
+# ── Shop colour palette ──────────────────────────────────────────────────────
+# A single shared palette is applied to every generated photo so the whole set
+# (and the shop) reads as one cohesive brand instead of a grab-bag of
+# backgrounds. Each shot keeps its own *composition*; only the colour scheme,
+# lighting temperature and prop tones are unified. Switch the whole look by
+# changing ACTIVE_PALETTE — no other edits needed.
+
+
+@dataclass(frozen=True)
+class Palette:
+    name: str
+    background: str      # background colours/surfaces
+    lighting: str        # light temperature/quality
+    props: str           # prop colours/materials
+    anchor: str          # short directive folded into every prompt's style hint
+
+
+PALETTES: dict[str, Palette] = {
+    "warm_ivory_gold": Palette(
+        name="Warm ivory & gold",
+        background="soft ivory and cream backgrounds",
+        lighting="warm golden natural lighting",
+        props="beige linen and light-wood props",
+        anchor=(
+            "consistent warm ivory-and-gold colour palette, soft ivory and cream "
+            "tones, warm golden lighting, cohesive editorial colour grading"
+        ),
+    ),
+    "cool_minimal_white": Palette(
+        name="Cool minimal white",
+        background="bright white and soft-grey backgrounds",
+        lighting="bright neutral daylight",
+        props="minimal matte-ceramic and glass props",
+        anchor=(
+            "consistent cool minimal white palette, bright white and soft-grey "
+            "tones, neutral daylight, clean airy cohesive colour grading"
+        ),
+    ),
+    "soft_blush_neutral": Palette(
+        name="Soft blush & neutral",
+        background="muted blush-pink and warm-taupe backgrounds",
+        lighting="soft diffused light with gentle shadows",
+        props="silk and pastel props",
+        anchor=(
+            "consistent soft blush-and-neutral palette, muted blush-pink and warm "
+            "taupe tones, soft diffused light, romantic cohesive colour grading"
+        ),
+    ),
+    "warm_earthy_stone": Palette(
+        name="Warm earthy stone",
+        background="sand, terracotta and travertine backgrounds",
+        lighting="warm directional sunlight",
+        props="natural stone and dried-botanical props",
+        anchor=(
+            "consistent warm earthy stone palette, sand, terracotta and travertine "
+            "tones, warm directional sunlight, organic cohesive colour grading"
+        ),
+    ),
+}
+
+ACTIVE_PALETTE = "warm_ivory_gold"
+_P = PALETTES[ACTIVE_PALETTE]
+
+
 # ── Prompt templates ─────────────────────────────────────────────────────────
+# Compositions stay distinct; backgrounds/lighting/props reference the shared
+# palette so the six shots colour-match each other.
 
 _MANNEQUIN_PROMPTS = [
-    "Front-facing portrait of a woman wearing the necklace, soft natural window light, plain neutral background, professional jewelry catalog photography",
-    "Three-quarter angle of a woman wearing the necklace, soft studio lighting, subtle beige background, editorial lifestyle photography",
-    "Close-up bust shot focused on the necklace against skin, gentle rim lighting, blurred neutral background, high detail",
+    f"Front-facing portrait of a woman wearing the necklace, {_P.lighting}, "
+    f"plain {_P.background}, professional jewelry catalog photography",
+    f"Three-quarter angle of a woman wearing the necklace, {_P.lighting}, "
+    f"{_P.background}, editorial lifestyle photography",
+    f"Close-up bust shot focused on the necklace against skin, gentle {_P.lighting}, "
+    f"blurred {_P.background}, high detail",
 ]
 
 _CONCEPT_PROMPTS = [
-    "The necklace displayed on textured marble surface, minimalist flat lay, soft daylight from top-left, styled with a small linen ribbon",
-    "The necklace inside an opened branded gift box on a light wooden surface, warm ambient lighting, cozy gifting atmosphere",
-    "Macro detail shot of the necklace pendant with soft bokeh background, showcasing craftsmanship and finish",
+    f"The necklace displayed as a minimalist flat lay on {_P.background}, "
+    f"{_P.lighting} from top-left, styled with {_P.props}",
+    f"The necklace inside an opened branded gift box, {_P.lighting}, "
+    f"cozy gifting atmosphere with {_P.background} and {_P.props}",
+    f"Macro detail shot of the necklace pendant with {_P.background} in soft bokeh, "
+    f"{_P.lighting}, showcasing craftsmanship and finish",
 ]
 
-_STYLE_HINT = "professional jewelry photography, soft natural lighting, high quality, sharp focus"
+_STYLE_HINT = (
+    f"professional jewelry photography, {_P.anchor}, high quality, sharp focus"
+)
 
 
 # ── Data ────────────────────────────────────────────────────────────────────
@@ -110,13 +184,18 @@ async def generate_jewelry_set(
     settings: "Settings",
     reference_image: Image.Image,
     output_dir: str | Path,
+    include_charts: bool = False,
 ) -> JewelryImageSet:
-    """Produce the full 9-image set for ``product`` and persist charts.
+    """Produce the 6 AI photos (3 mannequin + 3 concept) for ``product``.
 
     Mannequin + concept shots are returned in-memory (the caller decides
-    how to name and persist them alongside DB rows). Charts are written to
-    disk under ``output_dir/charts/`` because they are deterministic
-    static PNGs.
+    how to name and persist them alongside DB rows).
+
+    Charts (size / birthstone / care) are only generated when
+    ``include_charts=True``; by default they are skipped so the set is the
+    6 AI photos only — remaining listing images (e.g. Rexven size/care
+    instructions) are added manually. Chart generation is retained for
+    callers that still want the deterministic PNGs.
     """
     output_dir = Path(output_dir)
     generator = ImageWorkflowFactory.get(workflow, settings)
@@ -150,7 +229,13 @@ async def generate_jewelry_set(
         r for r in (_first_or_none(x) for x in ai_results[3:6]) if r is not None
     ]
 
-    # ── Charts (deterministic, sync) ──────────────────────────────────────
+    # ── Charts (deterministic, sync) — skipped unless explicitly requested ─
+    if not include_charts:
+        return JewelryImageSet(
+            mannequin_shots=mannequin_shots,
+            concept_shots=concept_shots,
+        )
+
     charts_dir = output_dir / "charts"
 
     preset = (

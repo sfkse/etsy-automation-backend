@@ -1,9 +1,10 @@
 """
 Gemini image generator (Step 5.3).
-Uses Gemini 2.0 Flash experimental image generation endpoint.
+Uses Gemini 3 Pro Image ("Nano Banana Pro") image generation endpoint.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 
 from PIL import Image
@@ -30,8 +31,12 @@ class GeminiImageGenerator(AbstractImageGenerator):
 
         full_prompt = f"{request.prompt}\n\nStyle: {request.style_hint}"
 
-        response = self.client.models.generate_content(
-            model="gemini-2.0-flash-exp-image-generation",
+        # The google-genai SDK call is synchronous/blocking — run it in a
+        # threadpool so it doesn't freeze the asyncio event loop (which would
+        # make the whole web server unresponsive during generation).
+        response = await asyncio.to_thread(
+            self.client.models.generate_content,
+            model="gemini-3-pro-image",
             contents=[
                 types.Part.from_bytes(data=ref_bytes.getvalue(), mime_type="image/png"),
                 full_prompt,
@@ -58,7 +63,7 @@ class GeminiImageGenerator(AbstractImageGenerator):
 
     @property
     def model_name(self) -> str:
-        return "gemini-2.0-flash-exp-image-generation"
+        return "gemini-3-pro-image"
 
     @property
     def cost_per_image(self) -> float:

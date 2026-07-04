@@ -111,8 +111,12 @@ class Product(Base):
     recipients_json = Column(JSONB, nullable=True)
     occasions_json = Column(JSONB, nullable=True)
     rexven_url = Column(String(500), nullable=True)
+    rexven_sku = Column(String(50), nullable=True, index=True)   # Supplier-side SKU (e.g. "REX-1664")
     original_image_path = Column(String(500), nullable=True)
-    cost_cents = Column(Integer, nullable=True)
+    cost_cents = Column(Integer, nullable=True)                  # Landed cost (product + shipping) when use_landed_cost was true
+    supplier_product_cents = Column(Integer, nullable=True)      # Rexven Premium "Product Price" in cents
+    supplier_shipping_cents = Column(Integer, nullable=True)     # Rexven Premium "Shipping Price" in cents
+    supplier_total_cents = Column(Integer, nullable=True)        # Rexven Premium "Total Price" in cents
 
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")

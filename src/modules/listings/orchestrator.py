@@ -76,6 +76,14 @@ class ListingBuildRequest(BaseModel):
 
     override_base_price_cents: Optional[int] = None
     cost_cents_override: Optional[int] = None
+    # Rexven price breakdown (Premium tier) captured by the Chrome extension
+    # from the authenticated DOM. When ``use_landed_cost`` is true, shipping is
+    # folded into the effective cost basis for pricing; either way, all three
+    # values are persisted on Product for downstream margin analytics.
+    supplier_product_cents: Optional[int] = None
+    supplier_shipping_cents: Optional[int] = None
+    supplier_total_cents: Optional[int] = None
+    use_landed_cost: bool = True
 
     variation_preset_name: Optional[str] = None
 
@@ -95,11 +103,27 @@ class ListingBuilder:
         settings = self._load_settings()
 
         rexven = self._resolve_rexven(req)
-        cost_cents = req.cost_cents_override or rexven.get("cost_cents") or 0
-        if not cost_cents:
+        # Base cost precedence: explicit override → Rexven scrape → product-only from extension.
+        base_cost_cents = (
+            req.cost_cents_override
+            or rexven.get("cost_cents")
+            or req.supplier_product_cents
+            or 0
+        )
+        if not base_cost_cents:
             raise ValueError(
                 "cost_cents_override required when Rexven scrape yields no cost"
             )
+        # Landed cost = product + shipping. When the extension supplies shipping
+        # and use_landed_cost is on (default), pricing formulas see the fully
+        # landed number so margins reflect reality.
+        cost_cents = base_cost_cents
+        if req.use_landed_cost and req.supplier_shipping_cents:
+            # Only fold in shipping if cost_cents_override wasn't already a landed value.
+            # Extension sends cost_cents_override = product-only, then relies on
+            # this branch to add shipping — keeps the semantics on one side.
+            if req.cost_cents_override is None or req.supplier_product_cents == req.cost_cents_override:
+                cost_cents = base_cost_cents + req.supplier_shipping_cents
 
         preset_name = req.variation_preset_name or self._auto_preset(
             req.category, req.material_type, req.personalization_choice
@@ -133,9 +157,13 @@ class ListingBuilder:
             personalization_template_id=personalization.id if personalization else None,
             target_keyword=req.target_keyword,
             rexven_url=req.rexven_url,
+            rexven_sku=req.rexven_sku,
             original_image_path=req.uploaded_image_path or rexven.get("image_path"),
             cost_cents=cost_cents,
             cost=Decimal(cost_cents) / Decimal(100),
+            supplier_product_cents=req.supplier_product_cents,
+            supplier_shipping_cents=req.supplier_shipping_cents,
+            supplier_total_cents=req.supplier_total_cents,
             is_featured=settings.feature_listing_default if settings else False,
         )
         self.session.add(product)
@@ -264,14 +292,24 @@ class ListingBuilder:
 
 async def run_listing_content_pipeline(product_sku: str) -> None:
     """
-    Background task: runs the existing content orchestrator, then wraps
-    each variant's description in the operational scaffold.
+    Background task: runs the existing content orchestrator, wraps each
+    variant's description in the operational scaffold, then kicks off the
+    image pipeline so approval-page reviewers see both text and images.
+
+    Image generation is skipped (with a warning) when no ``is_real=True``
+    ``ProductImage`` rows exist — this keeps the JSON-only ``POST /listings/build``
+    endpoint usable for scripting/testing without breaking Etsy publish, which
+    still requires at least one image and will surface the gap explicitly.
 
     Kept as a module-level coroutine so FastAPI's ``BackgroundTasks``
     can enqueue it directly.
     """
-    from src.web.routes.content import _build_orchestrator   # local import to avoid cycles
+    from src.config.settings import Settings   # local import to avoid cycles
+    from src.db.models import ProductImage
+    from src.modules.images.pipeline import run_image_pipeline
+    from src.web.routes.content import _build_orchestrator
 
+    settings = Settings()
     session = SessionLocal()
     try:
         product = session.query(Product).filter_by(sku=product_sku).first()
@@ -315,13 +353,42 @@ async def run_listing_content_pipeline(product_sku: str) -> None:
                 )
 
         product.generated_variants = [v.to_dict() for v in bundle.variants]
-        product.status = ProductStatus.AWAITING_APPROVAL.value
         session.commit()
         _log.info(
-            "listing_pipeline_complete",
+            "listing_pipeline_content_complete",
             sku=product_sku,
             variants=len(bundle.variants),
         )
+
+        # ── Image pipeline stage ─────────────────────────────────────────────
+        has_real_image = (
+            session.query(ProductImage)
+            .filter_by(product_id=product.id, is_real=True)
+            .first()
+            is not None
+        )
+        if not has_real_image:
+            _log.warning(
+                "listing_pipeline_images_skipped_no_real_image",
+                sku=product_sku,
+                hint="Use POST /listings/build-with-image or attach a ProductImage row.",
+            )
+            product.status = ProductStatus.AWAITING_APPROVAL.value
+            session.commit()
+            return
+
+        try:
+            await run_image_pipeline(product, session, settings)
+        except Exception as exc:
+            _log.exception("listing_pipeline_images_failed", sku=product_sku, error=str(exc))
+            product.status = ProductStatus.FAILED.value
+            session.commit()
+            return
+
+        # run_image_pipeline sets AWAITING_APPROVAL itself; re-assert defensively.
+        product.status = ProductStatus.AWAITING_APPROVAL.value
+        session.commit()
+        _log.info("listing_pipeline_complete", sku=product_sku)
     finally:
         session.close()
 

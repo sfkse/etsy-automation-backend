@@ -71,7 +71,7 @@ class TestTitleValidator:
     # ── Length rule ────────────────────────────────────────────────────────────
 
     def test_exact_min_length_passes(self) -> None:
-        title = _make_title(137)
+        title = _make_title(120)
         valid, violations = validate_title(title)
         assert valid
         assert violations == []
@@ -83,10 +83,10 @@ class TestTitleValidator:
         assert violations == []
 
     def test_one_below_min_fails(self) -> None:
-        title = _make_title(136)
+        title = _make_title(119)
         valid, violations = validate_title(title)
         assert not valid
-        assert any("136" in v for v in violations)
+        assert any("119" in v for v in violations)
 
     def test_one_above_max_fails(self) -> None:
         title = _make_title(141)
@@ -367,7 +367,7 @@ class TestOriginalityChecker:
 
 class TestBusinessRuleConstants:
     def test_title_length_range(self) -> None:
-        assert br.TITLE_MIN_LENGTH == 137
+        assert br.TITLE_MIN_LENGTH == 120
         assert br.TITLE_MAX_LENGTH == 140
         assert br.TITLE_MIN_LENGTH < br.TITLE_MAX_LENGTH
 

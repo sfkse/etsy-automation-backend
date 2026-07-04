@@ -30,6 +30,7 @@ dependencies = [
     # AI providers
     "anthropic>=0.34.0",
     "google-generativeai>=0.8.0",
+    "google-genai>=1.0.0",
     "openai>=1.52.0",
     "fal-client>=0.5.0",
 
@@ -51,6 +52,9 @@ dependencies = [
     # Image processing (Phase 5)
     "Pillow>=10.4.0",
     "rembg>=2.0.57",
+    # rembg imports onnxruntime lazily but errors at import time if missing; pin
+    # explicitly so fresh venvs don't ImportError inside run_image_pipeline.
+    "onnxruntime>=1.17.0",
 
     # Scheduling (Phase 9)
     "apscheduler>=3.10.4",

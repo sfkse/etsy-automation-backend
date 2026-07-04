@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image
+from PIL import Image, ImageOps
 from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
@@ -67,10 +67,16 @@ def _seo_filename(sku: str, index: int, product: Product) -> str:
 
 
 def _resize_to_target(img: Image.Image) -> Image.Image:
-    """Resize image to TARGET_SIZE (2000×2000) with white background fill."""
+    """Scale image up/down to fill TARGET_SIZE (2000×2000), preserving aspect.
+
+    Uses ``ImageOps.contain`` which *upscales* as well as downscales (unlike
+    ``Image.thumbnail`` which only shrinks) — so the native 1024×1024 model
+    output fills the full 2000×2000 frame instead of floating in white padding.
+    Any non-square output is letterboxed onto a white canvas.
+    """
     img = img.convert("RGBA")
     canvas = Image.new("RGBA", TARGET_SIZE, (255, 255, 255, 255))
-    img.thumbnail(TARGET_SIZE, Image.LANCZOS)
+    img = ImageOps.contain(img, TARGET_SIZE, Image.LANCZOS)
     offset = ((TARGET_SIZE[0] - img.width) // 2, (TARGET_SIZE[1] - img.height) // 2)
     canvas.paste(img, offset, img)
     return canvas.convert("RGB")
@@ -276,15 +282,25 @@ async def _run_jewelry_9_pipeline(
         filename = f"{sku.lower()}-{kind}-{idx}.jpg"
         path = ai_dir / filename
         _save_ai_shot(result, path, apply_cover_crop=is_cover)
-        db_image = ProductImage(
-            product_id=product.id,
-            file_path=str(path),
-            rank=next_rank,
-            is_real=False,
-            workflow_source=workflow_name,
-            is_selected=is_cover,
+        # Upsert by filename so re-running the pipeline replaces a slot's photo
+        # in place instead of appending a duplicate row.
+        db_image = (
+            session.query(ProductImage)
+            .filter_by(product_id=product.id, is_real=False)
+            .filter(ProductImage.file_path.like(f"%{filename}"))
+            .first()
         )
-        session.add(db_image)
+        if db_image is None:
+            db_image = ProductImage(
+                product_id=product.id,
+                file_path=str(path),
+                is_real=False,
+            )
+            session.add(db_image)
+        db_image.file_path = str(path)
+        db_image.rank = next_rank
+        db_image.workflow_source = workflow_name
+        db_image.is_selected = is_cover
         session.flush()
         db_image.alt_text = generate_alt_text(product, db_image)
         next_rank += 1
@@ -299,15 +315,24 @@ async def _run_jewelry_9_pipeline(
         nonlocal next_rank
         if chart is None:
             return
-        db_image = ProductImage(
-            product_id=product.id,
-            file_path=chart.file_path,
-            rank=next_rank,
-            is_real=False,
-            workflow_source=f"chart:{chart.kind}",
-            is_selected=False,
+        chart_name = str(chart.file_path).rsplit("/", 1)[-1]
+        db_image = (
+            session.query(ProductImage)
+            .filter_by(product_id=product.id, is_real=False)
+            .filter(ProductImage.file_path.like(f"%{chart_name}"))
+            .first()
         )
-        session.add(db_image)
+        if db_image is None:
+            db_image = ProductImage(
+                product_id=product.id,
+                file_path=chart.file_path,
+                is_real=False,
+            )
+            session.add(db_image)
+        db_image.file_path = chart.file_path
+        db_image.rank = next_rank
+        db_image.workflow_source = f"chart:{chart.kind}"
+        db_image.is_selected = False
         session.flush()
         db_image.alt_text = generate_alt_text(product, db_image)
         next_rank += 1

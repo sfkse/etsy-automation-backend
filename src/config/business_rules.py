@@ -5,7 +5,14 @@ No logic here; only data declarations.
 """
 
 # ─── Title ────────────────────────────────────────────────────────────────────
-TITLE_MIN_LENGTH: int = 137
+# Etsy's hard cap is 140 chars. The min is our own SEO floor — keeping it in the
+# 120–140 band still uses ~86% of available characters (well above the ~100-char
+# average of top-ranked Etsy titles) while giving the LLM a realistic target it
+# can hit without char-counting acrobatics. Previous value of 137 produced a
+# 4-char window that LLMs missed on nearly every generation, forcing the retry
+# path and often falling back to invalid titles that surfaced as approval
+# violations. See title_generator.py::_retry_with_relaxation.
+TITLE_MIN_LENGTH: int = 120
 TITLE_MAX_LENGTH: int = 140
 TITLE_FIRST_NICHE_CHARS: int = 60  # first 60 chars = niche description zone
 TITLE_SEPARATOR: str = ", "        # comma-space, never pipe

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import structlog
 
+from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
 from src.config.prompts import JEWELRY_ADJECTIVE_LADDER, TITLE_GENERATION_PROMPT
 from src.db.models import Product
 from src.domain.validators import validate_title
@@ -158,9 +159,9 @@ class TitleGenerator:
             angle_label=angle.label,
             angle_instructions=(
                 angle.prompt_instructions
-                + "\n\nCRITICAL: Previous attempt produced titles outside 137-140 chars. "
+                + f"\n\nCRITICAL: Previous attempt produced titles outside {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars. "
                 "Count characters on each title before writing it. Use padding phrases like "
-                "'for Women', 'Jewelry Gift', 'Layering Necklace' to reach exactly 137-140 chars."
+                f"'for Women', 'Jewelry Gift', 'Layering Necklace' to reach {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars."
             ),
         )
 

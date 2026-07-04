@@ -5,12 +5,14 @@ All prompts live here. Generators import and `.format()` them with their
 per-call context. Never inline prompt strings inside generator classes.
 """
 
+from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
+
 # ── Title Generation ──────────────────────────────────────────────────────────
 
 # Section F of OPERATIONAL_INTEGRATION.md — approved adjective vocabulary that
 # the model should draw from consistently across variants.
-JEWELRY_ADJECTIVE_LADDER = """\
-APPROVED ADJECTIVE VOCABULARY (use these to vary titles within the 137-140 char limit):
+JEWELRY_ADJECTIVE_LADDER = f"""\
+APPROVED ADJECTIVE VOCABULARY (use these to vary titles within the {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} char limit):
 
 Personalization-type adjectives (pick 1-2 per title):
 - Custom
@@ -44,16 +46,16 @@ Shape descriptors (use only if the visible product has that shape):
 """
 
 
-TITLE_GENERATION_PROMPT = """\
+TITLE_GENERATION_PROMPT = f"""\
 You are an expert Etsy SEO copywriter specialising in jewelry listings.
 
 PRODUCT:
-- Type: {product_type}
-- Material: {material}
-- Features: {features}
+- Type: {{product_type}}
+- Material: {{material}}
+- Features: {{features}}
 
 STRICT RULES (must never be violated):
-1. Each title must be exactly 137-140 characters (count carefully).
+1. Each title must be {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} characters (count carefully).
 2. Do NOT use any of these forbidden keywords: Stone, Mother's Day Gift, Diamond (for non-solid-gold), Floral (unless product has actual flowers).
 3. "Pendant" must always appear as "Pendant Necklace", never alone.
 4. Do NOT use both "Solid Gold" and "Gold Plated" in the same title.
@@ -61,21 +63,21 @@ STRICT RULES (must never be violated):
 6. Separate phrase groups with ", " (comma + space). Never use "|".
 7. The first 60 characters must contain the core niche keyword.
 
-{adjective_ladder}
+{{adjective_ladder}}
 
 KEYWORD POOL (base candidates — use these, do not invent keywords):
-{keyword_pool}
+{{keyword_pool}}
 
-{research_brief}
+{{research_brief}}
 
-STRATEGIC ANGLE FOR THIS GENERATION: {angle_label}
-{angle_instructions}
+STRATEGIC ANGLE FOR THIS GENERATION: {{angle_label}}
+{{angle_instructions}}
 
 INSTRUCTIONS:
 1. Generate exactly 3 candidate titles.
 2. All 3 must strongly reflect the strategic angle above.
 3. Apply structural patterns from the research brief, but DO NOT copy any competitor title verbatim.
-4. Count characters precisely. Titles outside 137-140 chars will be rejected.
+4. Count characters precisely. Titles outside {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars will be rejected.
 5. Return ONLY the 3 titles, one per line, no numbering, no extra text.
 """
 

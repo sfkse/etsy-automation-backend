@@ -5,6 +5,7 @@ IP-Adapter strength 0.85 preserves jewelry detail.
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 
@@ -36,7 +37,11 @@ class FluxImageGenerator(AbstractImageGenerator):
         request.reference_image.save(ref_bytes, format="PNG")
         ref_bytes.seek(0)
 
-        ref_url = fal_client.upload(ref_bytes, content_type="image/png")
+        # fal_client.upload expects raw bytes, not a BytesIO (it calls len()).
+        # It's a blocking network POST — run it off the event loop.
+        ref_url = await asyncio.to_thread(
+            fal_client.upload, ref_bytes.getvalue(), content_type="image/png"
+        )
 
         result = await fal_client.run_async(
             "fal-ai/flux/dev/image-to-image",

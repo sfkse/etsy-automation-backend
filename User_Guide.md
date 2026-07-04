@@ -116,7 +116,103 @@ Artık üretim modunda hazırsın.
 
 ---
 
+### 1.5 — Shop Settings (Bir Kere, İlk Build'den Önce)
+
+> **Neden:** Operational Integration (v2.5) ile birlikte listing builder artık `ShopSettings` singleton'ından okuyor. Bu tabloyu ilk build'den önce doldurmazsan Etsy publish 400 döner veya yanlış fiyat/varyasyon çıkar.
+>
+> **Nerede:** Tabbed HTML UI → `localhost:8000/settings`. Aynı veriyi JSON API üzerinden de yazabilirsin (`POST /settings/{tab}`).
+
+**8 tab, sırayla:**
+
+1. **Production Partner** — Etsy hesabında "manufacturer" olarak sen görünüyorsan bile bir production partner id lazım (payload builder her listing'e `production_partner_ids` ekliyor).
+   - `/settings/production-partner` formu: `production_partner_id`, `production_partner_name`, `about`, `location`, `q1/q2/q3` (capacity/design/everything).
+   - `POST /settings/production-partner/sync` — şimdilik **manual-setup ack** (Etsy Open API v3'te partner create endpoint'i yok). Partner'ı Etsy admin UI'da elle yarat, ID'yi buraya yapıştır.
+
+2. **Description Templates** — kategori başına (necklace, earring, ring) Jinja scaffold: `section_intro`, `section_how_to_order`, `section_materials`, `section_packaging`, `section_gift_note`, `section_best_gifts_for`, `section_have_a_question`, `default_chain_text`, brass/silver override'ları. `DescriptionEngine.fill` LLM intro'yu bu iskeletle sarıyor.
+
+3. **Default Attributes** — kategori başına Etsy attribute default'ları: `style`, `theme`, `holiday_default`, `sustainability`, `chain_style`, `adjustable`, `convertible`, `default_occasion`, `default_recipients`. Payload builder bunları override yoksa uyguluyor.
+
+4. **Variation Presets** — Finish × Length veya Finish × MultiCount matrisinin şablonu. İsim konvansiyonu:
+   - `necklace_brass_standard` (Gold/Silver/Rose × 16/18/20 inch)
+   - `necklace_brass_multi_birthstone` (Gold/Silver × 1/2/3 taş)
+   - `necklace_silver_standard`
+   - `earring_basic`
+   - `seed_shop_defaults.seed_all` startup'ta bunları idempotent olarak seed'liyor.
+
+5. **Pricing Strategy** — singleton (`id=1`). Alanlar:
+   - `base_multiplier` (default 4.0) — cost × 4 = base price
+   - `finish_offsets_pct` — `{"Gold": 0, "Silver": -3, "Rose": -5}`
+   - `length_base_inches=16`, `length_price_per_extra_inch_pct=2.5`
+   - Loss-leader row: `loss_leader_enabled`, `loss_leader_finish="Rose"`, `loss_leader_length=12`, `loss_leader_margin_pct=15`
+   - `multi_count_extra_pct=12` (her ekstra taş için)
+
+6. **Personalization Library** — `PersonalizationTemplate` satırları. `PersonalizationPicker.USER_FACING_OPTIONS` bunları isim→template map'liyor (örn. "1 birthstone + 1 initial" → `birthstone_initial_single`). `GET /listings/personalization-options` extension'a listeyi veriyor.
+
+7. **Operations** — `ShopSettings` üzerindeki operasyonel flag'ler:
+   - `renewal_option` (automatic / manual)
+   - `return_policy_days` (default 14)
+   - `default_quantity` (default **999** — v2.5 ile değişti, aşağı bak)
+   - `feature_listing_default`
+   - `omit_karat_in_title` (default true — "22K" başlığa girmesin)
+   - `image_workflow_mode` — `"jewelry_9"` (yeni default) veya `"legacy"`
+   - `auto_create_sections` (default true)
+   - `active_pillars` — hangi carrier pillar'lar aktif
+   - `default_shipping_profile_id`
+
+8. **Shop Sections** — Etsy mağazandaki bölümler. İki yol:
+   - Elle: `POST /settings/shop-sections/{name}` ile her satırı yaz.
+   - Otomatik (önerilir): `auto_create_sections=true` bırak. Yeni bir carrier pillar için ilk build çalıştığında `ListingBuilder._ensure_shop_section` bölümü otomatik yaratır (`Cross Necklace`, `Birthstone Necklace` vs).
+   - Sonra: `POST /settings/shop-sections/sync` → yerel satırları Etsy'ye push et. Idempotent — `etsy_section_id` dolu satırlar atlanır. Cevapta `{"created": [...], "errors": [...]}`.
+
+**Kontrol:** `GET /settings` → tüm tab'ların değerini tek round-trip'te dön. Boş değerler için default'lar seed'den geliyor.
+
+---
+
 ## 📦 2. Günlük Ürün Üretimi
+
+> **İki giriş yolu var (v2.5 sonrası):**
+>
+> **A. Klasik yol — Backend HTML formu:** `localhost:8000/products/new`
+>
+> Server-rendered manuel input formu ([backend/src/web/routes/input.py](backend/src/web/routes/input.py)). Serbest metin alanları, foto upload. Sistemi öğrenirken veya standart preset'lerin dışında bir şey yapıyorsan iyi. Aşağıdaki 2.1–2.6 bu yolu anlatıyor.
+>
+> **B. Önerilen yol — Chrome extension "Listing Builder" tab'ı:**
+>
+> Extension popup'ında "Listing Builder" tab'ı hazır ([etsy-chrome-extension/popup.html](etsy-chrome-extension/popup.html), [etsy-chrome-extension/listing_builder.js](etsy-chrome-extension/listing_builder.js)). Akış:
+>
+> 1. Rexven ürün sayfasındayken extension popup'ını aç → **Listing Builder** tab'ı.
+> 2. Form kendini doldurur: carrier pillar dropdown'u `/settings/operations`'tan `active_pillars`'ı çeker, personalization dropdown'u `/listings/personalization-options`'tan gelir, Rexven URL'i aktif tab'dan otomatik alınır.
+> 3. Eksikleri elle doldur: material_type, personalization seçimi, stone_shape, target_keyword (Title Helper tab'ından "Use for Build" ile aktarabilirsin), opsiyonel `override_base_price`.
+> 4. **Build** butonuna bas → extension `POST /listings/build`'e istek yollar.
+> 5. Extension arka planda `GET /listings/{sku}/status`'u 3 sn aralıkla poll'lar.
+> 6. Status `AWAITING_APPROVAL`'a düşünce approval sayfası otomatik açılır.
+>
+> Backend bu sırada: preset seçer → `VariationRow` matrisini yazar → `PersonalizationTemplate` FK'sini bağlar → `run_listing_content_pipeline` background task'ini kuyruklar. **Günlük üretim için önerilen yol bu**; klasik `/products/new` formunun aksine variation matrix + personalization + description scaffold otomatik uygulanır.
+>
+> <details>
+> <summary>Advanced: doğrudan API çağrısı (scripting / test için)</summary>
+>
+> Extension olmadan `POST /listings/build` gövdesi:
+>
+> ```json
+> {
+>   "carrier_pillar": "birthstone",
+>   "category": "necklace",
+>   "material_type": "brass",
+>   "personalization_choice": "1 birthstone + 1 initial",
+>   "stone_shape": "round",
+>   "target_keyword": "birthstone necklace",
+>   "rexven_url": "https://members.rexven.com/product-details/XXXX",
+>   "cost_cents_override": 750,
+>   "override_base_price_cents": null,
+>   "variation_preset_name": null,
+>   "uploaded_image_path": null
+> }
+> ```
+>
+> Poll: `GET /listings/{sku}/status`. Matrix'i görmek için: `GET /listings/{sku}/variations`. Personalization seçeneklerinin canlı listesi: `GET /listings/personalization-options`. Backend'in bu endpoint için HTML form sayfası **yok** — sadece JSON API. UI ihtiyacın varsa Path B (extension) veya Path A (`/products/new`) kullan.
+>
+> </details>
 
 ### 2.1 — Reksven'den Ürün Seç
 
@@ -153,9 +249,21 @@ Backend'de **`/products/new`** sayfasına git:
 ### 2.3 — Generate Tıkla (45-75 sn bekle)
 
 Backend arka planda şunları yapar:
-1. **Stage 1**: AI image generation (3 supplier + 6 AI lifestyle = 9 toplam)
+1. **Stage 1**: AI image generation. `ShopSettings.image_workflow_mode` dispatch:
+   - **`"jewelry_9"` (yeni default)** — 3 mannequin + 3 concept + 3 chart, rank sıralı:
+     ```
+     Rank 1     — cover photo (best mannequin, auto-cropped)
+     Rank 2-3   — mannequin shots
+     Rank 4-6   — concept lifestyle shots
+     Rank 7     — size chart (deterministik Pillow overlay)
+     Rank 8     — birthstone chart (yalnızca stone_shape veya has_birthstone ise)
+     Rank 9     — care instructions chart
+     Rank 10    — opsiyonel gift-box shot
+     ```
+   - **`"legacy"`** — eski 5-lifestyle akışı. Dönmek için: `/settings/operations` → `image_workflow_mode="legacy"`.
 2. **Stage 2 (paralel)**: 3 LLM variant üretir
 3. **Stage 3**: Validation (title 137-140 char, 13 tag, originality ≥96%)
+4. **Stage 4**: `DescriptionEngine.fill` her variant'ın description'ını kategori Jinja scaffold'una sarar (intro + how-to-order + materials + packaging + gift-note + best-gifts-for + have-a-question).
 
 Bittiğinde mail/notif gelir veya manuel `/products/awaiting_approval` listesine düşer.
 
@@ -198,11 +306,50 @@ Approve dediğin an:
 
 `/products/published` listesinde görürsün.
 
-### 2.6 — Günlük Hedef
+### 2.6 — Approval Preview: Etsy Payload'ı (Publish Öncesi Sanity Check)
+
+> **Yeni (PR 2):** Approve'a basmadan Etsy'ye tam olarak neyin gideceğini gör.
+
+Approval detail sayfasında her variant kartının altında `<details>` bloğu var:
+
+```
+▸ Etsy payload preview
+```
+
+Aç → `GET /approval/{sku}/payload-preview?variant_id=A` çağrılır, cevabı EtsyListingPayloadBuilder'ın publisher'a vereceği JSON'un birebir aynısı:
+
+```json
+{
+  "title": "...",
+  "description": "...",
+  "tags": [...],
+  "materials": [...],
+  "shipping_profile_id": "ship_1",
+  "shop_section_id": "12345",
+  "production_partner_ids": ["pp_42"],
+  "should_auto_renew": true,
+  "quantity": 999,
+  "inventory": {
+    "products": [
+      { "sku": "TAKI-0142-GO-16", "offerings": [...], "property_values": [...] },
+      ...
+    ]
+  }
+}
+```
+
+**Ne zaman bakmalısın:**
+- İlk 5 listing'de her seferinde — production_partner_ids ve shipping_profile_id boş çıkıyor mu?
+- Bir ShopSettings alanını değiştirdikten sonra ilk build'de — değişiklik payload'a düşmüş mü?
+- Bir listing Etsy'de 400 dönerse — hangi field problemli, elle kontrol.
+
+### 2.7 — Günlük Hedef
 
 **10 yeni listing/gün** sürdürülebilir tempo. Yeni başlıyorsan **5 listing/gün** ile başla, ısındıkça artır.
 
 Etsy yeni mağazalar için "warm up" periyodu uyguluyor — ilk 30 günde 100+ listing atmak şüphe çekebilir.
+
+> **Publisher-side guard:** `POST /admin/etsy/publish` bulk endpoint'i `SHOP_CREATION_DATE` env var'ından mağaza yaşını okuyor. Yeni mağazalarda (`_is_new_shop` true) günlük limit **15 listing**, olgun mağazalarda **50 listing**. `/admin/etsy` dashboard'da "remaining_today" sayacını görürsün.
 
 ---
 
@@ -501,7 +648,9 @@ Etsy'de "renewal" listing'i feed'in başına atar. Bizim sistem otomatik yapıyo
 | **10-300** | Test ediyorsun, niş emin değil | Bitince yeniden ekle, manuel kontrol şansı |
 | **1** | **ASLA** | Algoritma sinyali öldürür |
 
-Yeni başlayan listing → 100. 30 gün sonra eğer 5+ satış varsa → 999'a çıkar.
+**v2.5 sonrası default:** `ShopSettings.default_quantity = 999` (payload builder her yeni listing'e bunu koyar). Değiştirmek için: `/settings/operations` → `default_quantity`.
+
+Yine de test aşamasındaki bir niş için düşürmek istersen `/settings/operations`'ta değeri geçici olarak 100'e çek, 30 gün sonra 5+ satış varsa tekrar 999'a çıkar. **1 asla** — Etsy sinyalini öldürür.
 
 ### 4.4 — Renewal Cycle Strategy (Daha Detaylı)
 
@@ -650,6 +799,9 @@ BONUS: price_alignment > 0.70 ise fiyatlamada rahat olacaksın.
 | Layer B sonucu beklenmeden keyword'ü seçmek | Sadece LLM tahmini var, pazar verisi yok | Status COMPLETED olana kadar bekle |
 | selected_keyword_score_id olmadan generate etmek | LLM keyword'ü bilmeden üretir, title'a yerleştirmez | ID'yi mutlaka form'a ekle |
 | backfill'i 5000'den az listing varken çalıştırmak | Görsel benzerlik anlamsız sonuç verir | Önce Phase 1+2'yi doldur |
+| `production_partner_id` boş bırakmak | Etsy publish 400 döner (payload_builder her listing'e `production_partner_ids` koyar) | `/settings/production-partner` doldur, sonra `/sync` |
+| `default_shipping_profile_id` set etmemek | Publish 400 veya listing "draft" kalır | `/settings/operations` → `default_shipping_profile_id` |
+| Shop-section elle Etsy'de yaratmak + auto_create_sections=true birlikte | Aynı isimle 2 bölüm oluşabilir | Birini seç — ya elle Etsy'de yarat, ya auto+`/sync` kullan |
 
 ---
 
@@ -695,7 +847,26 @@ Veri persistent volume'da (`etsy_taki_pgdata`), kaybolmaz. Eğer **gerçekten** 
 docker compose down -v   # volume dahil sil (NUCLEAR)
 ```
 
-### 7.5 — Anthropic API key suspend / fatura sorunu
+### 7.5 — Shop-section sync başarısız
+
+`POST /settings/shop-sections/sync` cevabında `errors[]` doluysa:
+
+```json
+{
+  "created": [{"name": "Cross Necklace", "etsy_section_id": "111"}],
+  "errors": [{"name": "Birthstone Necklace", "error": "..."}]
+}
+```
+
+Sync per-row hata izolasyonu yapıyor — bir bölüm patlarsa diğerleri yine push edilir. Hata mesajını oku:
+- **401/403** → Etsy token expired veya scope eksik. `/admin/etsy/connect` ile yeniden bağlan.
+- **409 conflict** → aynı title Etsy'de zaten var. `/settings/shop-sections/{name}` ile `etsy_section_id`'yi elle set et.
+- **429** → rate limit; endpoint'i 1-2 dk sonra tekrar çağır (idempotent).
+- Diğer 4xx/5xx → `logs/app.log` → "shop_section_sync_failed" satırını gör.
+
+Sync idempotent: `etsy_section_id` dolu satırlar filter dışında kaldığından güvenle yeniden çalıştırabilirsin.
+
+### 7.6 — Anthropic API key suspend / fatura sorunu
 
 LLM çağrıları başarısız olur. Backend exception loglar, listing CONTENT_GENERATING state'inde kalır.
 
@@ -806,6 +977,22 @@ Sourcing listesi:    localhost:8000/sourcing
 Analiz başlat:       POST localhost:8000/sourcing/analyze
 Sadece keywords:     POST localhost:8000/sourcing/suggest-keywords
 Analiz sonucu:       GET  localhost:8000/sourcing/{analysis_id}
+
+--- Operational Integration (v2.5) ---
+Listing Builder:      POST localhost:8000/listings/build
+Build status:         GET  localhost:8000/listings/{sku}/status
+Variation matrix:     GET  localhost:8000/listings/{sku}/variations
+Personalization list: GET  localhost:8000/listings/personalization-options
+
+Settings UI:          localhost:8000/settings
+Settings API tabs:    /settings/{production-partner|description-templates|
+                       default-attributes|variation-presets|pricing-strategy|
+                       personalization-library|operations|shop-sections}
+Sync shop sections:   POST localhost:8000/settings/shop-sections/sync
+Sync production ptr:  POST localhost:8000/settings/production-partner/sync  (stub)
+
+Payload preview:      GET  localhost:8000/approval/{sku}/payload-preview?variant_id=A
+Quick scrape (title): POST localhost:8000/research/quick-scrape
 ```
 
 ---

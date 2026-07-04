@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Images — {{ product.sku }}{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3">
+  <a href="/approval/{{ product.sku }}" class="text-muted text-decoration-none small">← {{ product.sku }}</a>
+</div>
+
+<h2 class="mb-1">Product Images</h2>
+<p class="text-muted mb-4">
+  6 AI photos (3 on-model + 3 concept). Regenerate any photo with a chosen backend,
+  or compare all backends side by side and keep the one you like. Other listing
+  images (size/care) are added manually.
+</p>
+
+<div class="row g-4" id="slot-grid">
+  {% for s in slots %}
+  <div class="col-md-4" data-slot="{{ s.slot }}">
+    <div class="card border-0 shadow-sm h-100">
+      <div class="card-header bg-white border-bottom d-flex align-items-center justify-content-between">
+        <span class="fw-semibold">{{ s.label }}</span>
+        <span class="badge bg-light text-dark slot-backend">{{ s.workflow or "—" }}</span>
+      </div>
+      <div class="card-body p-0 position-relative">
+        <div class="slot-spinner d-none position-absolute top-50 start-50 translate-middle">
+          <div class="spinner-border text-primary" role="status"></div>
+        </div>
+        {% if s.url %}
+        <img src="{{ s.url }}" alt="{{ s.label }}" class="img-fluid w-100 slot-img"
+             style="aspect-ratio:1; object-fit:cover;">
+        {% else %}
+        <div class="d-flex align-items-center justify-content-center bg-light text-muted slot-img-placeholder"
+             style="aspect-ratio:1; font-size:.85rem;">No image yet</div>
+        <img src="" alt="{{ s.label }}" class="img-fluid w-100 slot-img d-none"
+             style="aspect-ratio:1; object-fit:cover;">
+        {% endif %}
+      </div>
+      <div class="card-footer bg-white border-top">
+        <div class="input-group input-group-sm mb-2">
+          <select class="form-select slot-workflow">
+            {% for wf in workflows %}
+            <option value="{{ wf }}" {% if wf == s.workflow %}selected{% endif %}>{{ wf | title }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-outline-primary btn-regenerate" type="button">Regenerate</button>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary w-100 btn-compare" type="button">
+          Compare backends
+        </button>
+        <div class="slot-candidates mt-2 d-none">
+          <div class="small text-muted mb-1">Pick one to keep:</div>
+          <div class="row g-2 candidate-row"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+const SKU = "{{ product.sku }}";
+
+async function postForm(url, data) {
+  const fd = new FormData();
+  for (const k in data) fd.append(k, data[k]);
+  const res = await fetch(url, { method: "POST", body: fd });
+  return res.json();
+}
+
+function cardFor(slot) {
+  return document.querySelector(`[data-slot="${slot}"]`);
+}
+function setBusy(card, busy) {
+  card.querySelector(".slot-spinner").classList.toggle("d-none", !busy);
+  card.querySelectorAll("button, select").forEach(el => el.disabled = busy);
+}
+function setImage(card, url) {
+  const img = card.querySelector(".slot-img");
+  const ph = card.querySelector(".slot-img-placeholder");
+  img.src = url;
+  img.classList.remove("d-none");
+  if (ph) ph.classList.add("d-none");
+}
+
+document.querySelectorAll(".btn-regenerate").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const card = btn.closest("[data-slot]");
+    const slot = card.dataset.slot;
+    const workflow = card.querySelector(".slot-workflow").value;
+    setBusy(card, true);
+    try {
+      const r = await postForm(`/products/${SKU}/images/regenerate`, { slot, workflow });
+      if (r.error) { alert("Regenerate failed: " + r.error); return; }
+      setImage(card, r.cache_url || r.url);
+      card.querySelector(".slot-backend").textContent = workflow;
+    } finally { setBusy(card, false); }
+  });
+});
+
+document.querySelectorAll(".btn-compare").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const card = btn.closest("[data-slot]");
+    const slot = card.dataset.slot;
+    const box = card.querySelector(".slot-candidates");
+    const row = card.querySelector(".candidate-row");
+    setBusy(card, true);
+    box.classList.remove("d-none");
+    row.innerHTML = '<div class="text-muted small">Generating with all backends…</div>';
+    try {
+      const r = await postForm(`/products/${SKU}/images/compare`, { slot });
+      if (r.error) { row.innerHTML = '<div class="text-danger small">' + r.error + '</div>'; return; }
+      row.innerHTML = "";
+      r.candidates.forEach(c => {
+        const col = document.createElement("div");
+        col.className = "col-4 text-center";
+        if (c.success && c.url) {
+          col.innerHTML =
+            `<img src="${c.url}" class="img-fluid rounded border mb-1" style="aspect-ratio:1;object-fit:cover;">
+             <div class="small text-truncate" title="${c.model_name}">${c.workflow}</div>
+             <button class="btn btn-sm btn-success w-100 btn-use" data-wf="${c.workflow}">Use</button>`;
+        } else {
+          col.innerHTML =
+            `<div class="bg-light rounded border d-flex align-items-center justify-content-center text-danger"
+                  style="aspect-ratio:1;font-size:.7rem;padding:4px;">${c.error || "failed"}</div>
+             <div class="small">${c.workflow}</div>`;
+        }
+        row.appendChild(col);
+      });
+      row.querySelectorAll(".btn-use").forEach(ub => {
+        ub.addEventListener("click", async () => {
+          const workflow = ub.dataset.wf;
+          setBusy(card, true);
+          try {
+            const sel = await postForm(`/products/${SKU}/images/select`, { slot, workflow });
+            if (sel.error) { alert("Select failed: " + sel.error); return; }
+            setImage(card, sel.cache_url || sel.url);
+            card.querySelector(".slot-backend").textContent = workflow;
+            card.querySelector(".slot-workflow").value = workflow;
+            box.classList.add("d-none");
+          } finally { setBusy(card, false); }
+        });
+      });
+    } finally { setBusy(card, false); }
+  });
+});
+</script>
+{% endblock %}
