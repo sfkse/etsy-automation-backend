@@ -89,6 +89,11 @@ class ListingBuildRequest(BaseModel):
 
     target_keyword: Optional[str] = None
 
+    # Phase 4 sourcing bridge — the KeywordScore the user picked in the
+    # extension's Sourcing tab. Persisted on Product and used to ground content
+    # generation in that keyword's empirical top-20 market data.
+    selected_keyword_score_id: Optional[int] = None
+
 
 class ListingBuilder:
     """Assemble a listing from a slim per-product request."""
@@ -156,6 +161,7 @@ class ListingBuilder:
             variation_preset_id=preset.id,
             personalization_template_id=personalization.id if personalization else None,
             target_keyword=req.target_keyword,
+            selected_keyword_score_id=req.selected_keyword_score_id,
             rexven_url=req.rexven_url,
             rexven_sku=req.rexven_sku,
             original_image_path=req.uploaded_image_path or rexven.get("image_path"),
@@ -307,6 +313,10 @@ async def run_listing_content_pipeline(product_sku: str) -> None:
     from src.config.settings import Settings   # local import to avoid cycles
     from src.db.models import ProductImage
     from src.modules.images.pipeline import run_image_pipeline
+    from src.modules.research.context_builder import (
+        build_sourcing_addendum,
+        patch_research_builder_for_sourcing,
+    )
     from src.web.routes.content import _build_orchestrator
 
     settings = Settings()
@@ -318,6 +328,13 @@ async def run_listing_content_pipeline(product_sku: str) -> None:
             return
 
         orchestrator = _build_orchestrator(session)
+
+        # Phase 4 bridge: ground every LLM call in the sourcing keyword the user
+        # picked in the extension, mirroring the classic generate-content route.
+        if product.selected_keyword_score_id:
+            addendum = build_sourcing_addendum(session, product.selected_keyword_score_id)
+            if addendum:
+                patch_research_builder_for_sourcing(orchestrator, addendum)
 
         try:
             bundle = await orchestrator.generate_bundle(product)

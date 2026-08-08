@@ -115,6 +115,14 @@ def _request(reference: Image.Image, prompt: str) -> ImageGenerationRequest:
     )
 
 
+def _effective_prompt(base: str, instructions: str | None) -> str:
+    """Append user art direction to the slot's built-in prompt (empty = unchanged)."""
+    instructions = (instructions or "").strip()
+    if not instructions:
+        return base
+    return f"{base}\n\nAdditional art direction: {instructions}"
+
+
 # ── Regenerate a single slot in place ────────────────────────────────────────
 
 
@@ -124,11 +132,14 @@ async def regenerate_slot(
     settings: Settings,
     slot: str,
     workflow: str,
+    instructions: str | None = None,
 ) -> ProductImage:
     """Regenerate ``slot`` with ``workflow`` and overwrite that photo in place.
 
     Updates the existing ProductImage row (or creates it if missing), keeping
-    the slot's canonical rank / cover status. Returns the persisted row.
+    the slot's canonical rank / cover status. ``instructions`` (optional) are
+    appended to the slot's built-in prompt as extra art direction and persisted
+    on the row so the page can pre-fill them. Returns the persisted row.
     """
     if not valid_slot(slot):
         raise ValueError(f"Unknown slot {slot!r}. Valid: {sorted(SLOTS)}")
@@ -137,7 +148,7 @@ async def regenerate_slot(
     reference = _reference_image(product, session, settings)
     generator = ImageWorkflowFactory.get(workflow, settings)
 
-    results = await generator.generate(_request(reference, prompt))
+    results = await generator.generate(_request(reference, _effective_prompt(prompt, instructions)))
     if not results:
         raise RuntimeError(f"{workflow} returned no image for slot {slot}")
 
@@ -161,6 +172,7 @@ async def regenerate_slot(
         session.add(row)
     row.file_path = str(path)
     row.workflow_source = workflow
+    row.regen_instructions = (instructions or "").strip() or None
     session.flush()
     row.alt_text = generate_alt_text(product, row)
     session.commit()
@@ -178,17 +190,20 @@ async def generate_slot_candidates(
     settings: Settings,
     slot: str,
     workflows: list[str] | None = None,
+    instructions: str | None = None,
 ) -> list[SlotCandidate]:
     """Generate ``slot`` with each backend and save as (uncommitted) candidates.
 
     Candidates land under ``ai_generated/candidates/{slot}__{workflow}.jpg`` so
-    the user can compare them side by side before promoting one.
+    the user can compare them side by side before promoting one. ``instructions``
+    (optional) are appended to the slot's built-in prompt for every candidate.
     """
     if not valid_slot(slot):
         raise ValueError(f"Unknown slot {slot!r}. Valid: {sorted(SLOTS)}")
 
     workflows = workflows or ImageWorkflowFactory.available_workflows()
     prompt, _rank, is_cover = SLOTS[slot]
+    prompt = _effective_prompt(prompt, instructions)
     reference = _reference_image(product, session, settings)
     cand_dir = _ai_dir(product, settings) / "candidates"
 
@@ -224,6 +239,7 @@ def select_candidate(
     settings: Settings,
     slot: str,
     workflow: str,
+    instructions: str | None = None,
 ) -> ProductImage:
     """Promote a previously-generated candidate to the committed slot photo."""
     if not valid_slot(slot):
@@ -256,6 +272,8 @@ def select_candidate(
         session.add(row)
     row.file_path = str(dest)
     row.workflow_source = workflow
+    if instructions is not None:
+        row.regen_instructions = instructions.strip() or None
     session.flush()
     row.alt_text = generate_alt_text(product, row)
     session.commit()

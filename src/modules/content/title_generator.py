@@ -96,7 +96,7 @@ class TitleGenerator:
 
         valid = []
         for title in candidates:
-            ok, violations = validate_title(title)
+            ok, violations = validate_title(title, target_keyword=product.target_keyword)
             if ok and not _too_similar_to_competitors(title):
                 valid.append(title)
             else:
@@ -117,11 +117,12 @@ class TitleGenerator:
 
     def _build_prompt(self, product: Product, angle: VariantAngle) -> str:
         keywords = self.pool.get_for_pillar(product.carrier_pillar)
-        research_ctx = self.research.build_for_carrier_pillar(product.carrier_pillar)
+        research_ctx = self.research.build_for_product(product)
         return TITLE_GENERATION_PROMPT.format(
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
+            target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
             adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords — use product type)",
             research_brief=research_ctx.format_for_prompt(),
@@ -147,12 +148,13 @@ class TitleGenerator:
         Returns the best candidate even if it fails validation (logged as warning).
         """
         keywords = self.pool.get_for_pillar(product.carrier_pillar)
-        research_ctx = self.research.build_for_carrier_pillar(product.carrier_pillar)
+        research_ctx = self.research.build_for_product(product)
 
         relaxed_prompt = TITLE_GENERATION_PROMPT.format(
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
+            target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
             adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords)",
             research_brief=research_ctx.format_for_prompt(),
@@ -168,7 +170,10 @@ class TitleGenerator:
         response = await self.llm.complete(relaxed_prompt, max_tokens=800)
         candidates = self._parse_titles(response)
 
-        valid = [t for t in candidates if validate_title(t)[0]]
+        valid = [
+            t for t in candidates
+            if validate_title(t, target_keyword=product.target_keyword)[0]
+        ]
         if valid:
             return max(valid, key=lambda t: _angle_alignment_score(t, angle))
 

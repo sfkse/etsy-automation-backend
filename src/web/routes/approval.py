@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
+from src.config.business_rules import MIN_IMAGES_PER_LISTING
 from src.db.dependencies import get_session
 from src.db.models import Product, ProductImage, ProductStatus
 from src.modules.approval.service import (
@@ -93,6 +94,7 @@ async def approval_queue(
         queue_items.append({
             "product": p,
             "image_count": img_count,
+            "low_images": img_count < MIN_IMAGES_PER_LISTING,
         })
 
     return _tmpl(
@@ -102,6 +104,7 @@ async def approval_queue(
             "queue_items": queue_items,
             "sort": sort,
             "total": len(queue_items),
+            "min_images": MIN_IMAGES_PER_LISTING,
         },
     )
 
@@ -149,6 +152,8 @@ async def approval_detail(
             "ctr_badge": CTR_BADGE,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
+            "min_images": MIN_IMAGES_PER_LISTING,
+            "low_images": len(images) < MIN_IMAGES_PER_LISTING,
         },
     )
 

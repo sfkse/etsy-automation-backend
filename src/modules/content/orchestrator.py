@@ -65,7 +65,7 @@ class VariantBundleOrchestrator:
         ]
         variants = list(await asyncio.gather(*variant_tasks))
 
-        snapshot_id = self.research.current_snapshot_id(product.carrier_pillar)
+        snapshot_id = self.research.current_snapshot_id(product)
         return VariantBundle(
             product_sku=product.sku,
             variants=variants,
@@ -147,7 +147,7 @@ class VariantBundleOrchestrator:
         Cheap heuristic — not an ML model.
         Compares variant against bestseller patterns from research.
         """
-        research = self.research.build_for_carrier_pillar(product.carrier_pillar)
+        research = self.research.build_for_product(product)
         if not research.has_data:
             return "unknown"
 

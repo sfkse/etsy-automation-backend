@@ -7,7 +7,6 @@
     <h2 class="mb-0">Products</h2>
     <p class="text-muted mb-0">{{ products | length }} product{{ 's' if products | length != 1 }}</p>
   </div>
-  <a href="/products/new" class="btn btn-primary">+ New Product</a>
 </div>
 
 {% if error %}
@@ -79,8 +78,7 @@
 <div class="text-center py-5">
   <div style="font-size:3rem;">💍</div>
   <h4 class="text-muted mt-3">No products yet</h4>
-  <p class="text-muted">Add your first product to get started.</p>
-  <a href="/products/new" class="btn btn-primary">+ New Product</a>
+  <p class="text-muted">Create your first listing from the Chrome extension's <strong>Build</strong> tab (open a Rexven product, then use the popup).</p>
 </div>
 
 {% endif %}

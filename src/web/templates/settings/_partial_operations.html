@@ -1,25 +1,5 @@
 {% set op = tabs.operations %}
 <form class="settings-form row g-3" data-settings-endpoint="/settings/operations">
-  <div class="col-md-4">
-    <label class="form-label small text-muted">Renewal option</label>
-    <select name="renewal_option" class="form-select">
-      {% for opt in renewal_options %}
-      <option value="{{ opt }}" {% if op.renewal_option == opt %}selected{% endif %}>{{ opt }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-md-4">
-    <label class="form-label small text-muted">Return policy (days)</label>
-    <input type="number" name="return_policy_days" class="form-control" value="{{ op.return_policy_days if op.return_policy_days is not none else '' }}">
-  </div>
-  <div class="col-md-4">
-    <label class="form-label small text-muted">Default quantity</label>
-    <input type="number" name="default_quantity" class="form-control" value="{{ op.default_quantity if op.default_quantity is not none else '' }}">
-  </div>
-  <div class="col-md-6">
-    <label class="form-label small text-muted">Default shipping profile ID</label>
-    <input type="text" name="default_shipping_profile_id" class="form-control" value="{{ op.default_shipping_profile_id or '' }}">
-  </div>
   <div class="col-md-6">
     <label class="form-label small text-muted">Image workflow mode</label>
     <select name="image_workflow_mode" class="form-select">
@@ -39,21 +19,8 @@
   </div>
   <div class="col-md-6">
     <div class="form-check mt-4">
-      <input type="checkbox" name="feature_listing_default" class="form-check-input" id="op-feature-listing" {% if op.feature_listing_default %}checked{% endif %}>
-      <label class="form-check-label" for="op-feature-listing">Feature new listings by default</label>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="form-check mt-4">
       <input type="checkbox" name="omit_karat_in_title" class="form-check-input" id="op-omit-karat" {% if op.omit_karat_in_title %}checked{% endif %}>
       <label class="form-check-label" for="op-omit-karat">Omit karat text in titles</label>
-    </div>
-  </div>
-  <div class="col-md-6">
-    <div class="form-check mt-4">
-      {% set auto_sections = op.auto_create_sections if op.auto_create_sections is not none else true %}
-      <input type="checkbox" name="auto_create_sections" class="form-check-input" id="op-auto-sections" {% if auto_sections %}checked{% endif %}>
-      <label class="form-check-label" for="op-auto-sections">Auto-create shop sections on first Build</label>
     </div>
   </div>
   <div class="col-12">

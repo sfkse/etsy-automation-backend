@@ -37,10 +37,12 @@ TAG_COUNT: int = 13
 TAG_MAX_LENGTH: int = 20
 
 # Distribution per variant angle
+# Kept within the training doc's 8-9 niche / 2-3 medium / 1-2 mainstream band —
+# mainstream tags disproportionately inflate ad spend without a matching lift.
 TAG_DISTRIBUTION: dict[str, dict[str, int]] = {
-    "A": {"mainstream": 6, "medium": 4, "niche": 3},   # Conservative niche
-    "B": {"mainstream": 2, "medium": 4, "niche": 7},   # Differentiated
-    "C": {"mainstream": 5, "medium": 5, "niche": 3},   # Gift-focused
+    "A": {"mainstream": 2, "medium": 3, "niche": 8},   # Conservative niche
+    "B": {"mainstream": 1, "medium": 3, "niche": 9},   # Differentiated
+    "C": {"mainstream": 1, "medium": 4, "niche": 8},   # Gift-focused
 }
 
 FORBIDDEN_TAG_PHRASES: list[str] = [

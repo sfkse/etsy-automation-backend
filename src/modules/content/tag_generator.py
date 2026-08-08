@@ -79,7 +79,7 @@ class TagGenerator:
             exclude_in_title=paired_title,
         )
 
-        research_ctx = self.research.build_for_carrier_pillar(product.carrier_pillar)
+        research_ctx = self.research.build_for_product(product)
         volume_buckets = self._extract_volume_buckets(research_ctx)
 
         if volume_buckets:

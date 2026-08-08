@@ -97,22 +97,24 @@ def client():
     app.dependency_overrides.clear()
 
 
-def test_settings_index_renders_all_eight_tabs(client):
+def test_settings_index_renders_generation_tabs(client):
+    """Generation-only build: the publish-oriented tabs (Production Partner,
+    Shop Sections) are hidden; only the content-generation tabs render."""
     resp = client.get("/settings")
     assert resp.status_code == 200
     html = resp.text
     assert "nav-tabs" in html
     for label in [
-        "Production Partner",
         "Description Templates",
         "Default Attributes",
         "Variation Presets",
         "Pricing Strategy",
         "Personalization",
         "Operations",
-        "Shop Sections",
     ]:
         assert label in html, f"missing tab label {label!r} in /settings response"
+    for hidden in ["Production Partner", "Shop Sections"]:
+        assert hidden not in html, f"publish-only tab {hidden!r} should be hidden"
 
 
 def test_settings_index_includes_static_scripts(client):

@@ -26,6 +26,7 @@
 18. [Kargo ve Kutu](#18-kargo-ve-kutu)
 19. [Final Checklist](#19-final-checklist)
 20. [Örnek Title Şablonları](#20-örnek-title-şablonları)
+21. [Büyüme Aşamaları ve Disiplin](#21-büyüme-aşamaları-ve-disiplin)
 ---
  
 ## 1. ANA FELSEFE
@@ -664,6 +665,19 @@ Dainty Sea Animal Jewelry, Beach Pendant,
 Summer Necklace, Ocean Lover Gift, Coastal Jewelry
 ```
  
+---
+ 
+## 21. BÜYÜME AŞAMALARI VE DİSİPLİN
+ 
+### Üç Aşamalı Strateji
+1. **0-3 ay:** Günde 10-15 ürün yükle, minimum 300+ liste hedefle
+2. **3-6 ay:** Taşıyıcı kolonları belirle, yorumlardan ürün keşfi yap
+3. **6+ ay:** Reklam bütçesini büyüt, sezonları erken hazırla
+### Disiplin Anahtardır
+- Her gün belli sayıda ürün yükle
+- Her bulduğun mağazayı sheet'e kaydet
+- Sezonları aylar önceden hazırla
+- Rakiplerini günlük takip et
 ---
  
 ## 🎯 ÖZET FELSEFE

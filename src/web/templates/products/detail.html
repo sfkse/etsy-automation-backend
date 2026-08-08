@@ -98,6 +98,8 @@
   <!-- ── Left: product fields ─────────────────────────────────────── -->
   <div class="col-lg-7">
 
+    {% set editable = product.status in ('approved', 'published') %}
+
     <div class="card border-0 shadow-sm mb-4">
       <div class="card-header fw-semibold bg-white border-bottom">Product Details</div>
       <div class="card-body">
@@ -106,32 +108,77 @@
           <dd class="col-sm-8">{{ product.carrier_pillar | replace('_', ' ') | title }}</dd>
 
           <dt class="col-sm-4 text-muted">Material</dt>
-          <dd class="col-sm-8">{{ product.material or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="material" value="{{ product.material or '' }}">
+            <span class="field-save-status small" data-status-for="material"></span>
+            {% else %}{{ product.material or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Color</dt>
-          <dd class="col-sm-8">{{ product.color or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="color" value="{{ product.color or '' }}">
+            <span class="field-save-status small" data-status-for="color"></span>
+            {% else %}{{ product.color or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Has Stone</dt>
           <dd class="col-sm-8">
-            {% if product.has_stone %}
-              Yes{% if product.stone_type %} — <em>{{ product.stone_type }}</em>{% endif %}
-            {% else %}No{% endif %}
+            {% if editable %}
+            <div class="form-check form-check-inline">
+              <input type="checkbox" class="form-check-input editable-field" data-field="has_stone" id="has_stone-input" {% if product.has_stone %}checked{% endif %}>
+              <label class="form-check-label small" for="has_stone-input">Has stone</label>
+            </div>
+            <input type="text" class="form-control form-control-sm editable-field mt-1" data-field="stone_type"
+                   placeholder="Stone type" value="{{ product.stone_type or '' }}">
+            <span class="field-save-status small" data-status-for="stone_type"></span>
+            {% else %}
+              {% if product.has_stone %}
+                Yes{% if product.stone_type %} — <em>{{ product.stone_type }}</em>{% endif %}
+              {% else %}No{% endif %}
+            {% endif %}
           </dd>
 
           <dt class="col-sm-4 text-muted">Shape</dt>
-          <dd class="col-sm-8">{{ product.shape or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="shape" value="{{ product.shape or '' }}">
+            <span class="field-save-status small" data-status-for="shape"></span>
+            {% else %}{{ product.shape or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Style</dt>
-          <dd class="col-sm-8">{{ product.style or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="style" value="{{ product.style or '' }}">
+            <span class="field-save-status small" data-status-for="style"></span>
+            {% else %}{{ product.style or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Occasion</dt>
-          <dd class="col-sm-8">{{ product.occasion or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="occasion" value="{{ product.occasion or '' }}">
+            <span class="field-save-status small" data-status-for="occasion"></span>
+            {% else %}{{ product.occasion or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Recipient</dt>
-          <dd class="col-sm-8">{{ product.recipient or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="text" class="form-control form-control-sm editable-field" data-field="recipient" value="{{ product.recipient or '' }}">
+            <span class="field-save-status small" data-status-for="recipient"></span>
+            {% else %}{{ product.recipient or '—' }}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Size Info</dt>
-          <dd class="col-sm-8">{{ product.size_info or '—' }}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <textarea class="form-control form-control-sm editable-field" data-field="size_info" rows="2">{{ product.size_info or '' }}</textarea>
+            <span class="field-save-status small" data-status-for="size_info"></span>
+            {% else %}{{ product.size_info or '—' }}{% endif %}
+          </dd>
         </dl>
       </div>
     </div>
@@ -141,10 +188,20 @@
       <div class="card-body">
         <dl class="row mb-0">
           <dt class="col-sm-4 text-muted">Cost</dt>
-          <dd class="col-sm-8">{% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="number" step="0.01" min="0" class="form-control form-control-sm editable-field" data-field="cost" value="{{ product.cost or '' }}">
+            <span class="field-save-status small" data-status-for="cost"></span>
+            {% else %}{% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}{% endif %}
+          </dd>
 
           <dt class="col-sm-4 text-muted">Selling Price</dt>
-          <dd class="col-sm-8">{% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}</dd>
+          <dd class="col-sm-8">
+            {% if editable %}
+            <input type="number" step="0.01" min="0.01" class="form-control form-control-sm editable-field" data-field="selling_price" value="{{ product.selling_price or '' }}">
+            <span class="field-save-status small" data-status-for="selling_price"></span>
+            {% else %}{% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}{% endif %}
+          </dd>
 
           {% if product.cost and product.selling_price %}
           <dt class="col-sm-4 text-muted">Margin</dt>
@@ -188,19 +245,44 @@
     <div class="card border-0 shadow-sm mb-4">
       <div class="card-header fw-semibold bg-white border-bottom">Approved Content</div>
       <div class="card-body">
-        {% if product.final_title %}
-        <p class="mb-1 fw-semibold">{{ product.final_title }}</p>
+
+        <div class="d-flex justify-content-between align-items-center mb-1">
+          <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Title</label>
+          <button type="button" class="btn btn-sm btn-outline-secondary copy-btn" data-copy-for="title">📋 Copy</button>
+        </div>
+        {% if editable %}
+        <p class="mb-1 fw-semibold editable-field" contenteditable="true" data-field="title" id="field-title">{{ product.final_title or '' }}</p>
+        {% else %}
+        <p class="mb-1 fw-semibold" id="field-title">{{ product.final_title }}</p>
         {% endif %}
-        {% if product.final_tags %}
-        <div class="mb-2">
+        <span class="field-save-status small" data-status-for="title"></span>
+
+        <div class="d-flex justify-content-between align-items-center mb-1 mt-3">
+          <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Tags</label>
+          <button type="button" class="btn btn-sm btn-outline-secondary copy-btn" data-copy-for="tags">📋 Copy</button>
+        </div>
+        {% if editable %}
+        <textarea class="form-control form-control-sm editable-field font-monospace" data-field="tags" id="field-tags" rows="2">{{ (product.final_tags or []) | join(', ') }}</textarea>
+        {% else %}
+        <div class="mb-2" id="field-tags" data-value="{{ (product.final_tags or []) | join(', ') }}">
           {% for tag in product.final_tags %}
           <span class="tag-chip">{{ tag }}</span>
           {% endfor %}
         </div>
         {% endif %}
-        {% if product.final_description %}
-        <p class="small text-muted mt-2 mb-0" style="white-space:pre-wrap;">{{ product.final_description }}</p>
+        <span class="field-save-status small" data-status-for="tags"></span>
+
+        <div class="d-flex justify-content-between align-items-center mb-1 mt-3">
+          <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Description</label>
+          <button type="button" class="btn btn-sm btn-outline-secondary copy-btn" data-copy-for="description">📋 Copy</button>
+        </div>
+        {% if editable %}
+        <textarea class="form-control form-control-sm editable-field" data-field="description" id="field-description" rows="8" style="white-space:pre-wrap;">{{ product.final_description or '' }}</textarea>
+        {% else %}
+        <p class="small text-muted mt-2 mb-0" id="field-description" style="white-space:pre-wrap;">{{ product.final_description }}</p>
         {% endif %}
+        <span class="field-save-status small" data-status-for="description"></span>
+
       </div>
     </div>
     {% endif %}
@@ -234,10 +316,12 @@
           {% for img in images %}
           <div class="thumbnail-card">
             {% set filename = img.file_path.split('/')[-1] if img.file_path else '' %}
+            {% set img_url = '/images/' ~ img.file_path.split('data/images/')[-1] if img.file_path else '' %}
             <div class="bg-light d-flex align-items-center justify-content-center"
                  style="aspect-ratio:1; font-size:.7rem; color:#999; overflow:hidden;">
               {% if img.file_path %}
-              <span class="p-2 text-center text-break" style="word-break:break-all;">{{ filename }}</span>
+              <img src="{{ img_url }}" alt="{{ img.alt_text or filename }}" loading="lazy"
+                   style="width:100%; height:100%; object-fit:cover;">
               {% else %}
               <span>No image</span>
               {% endif %}
@@ -290,6 +374,12 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<style>
+  .field-save-status:empty { display: none; }
+  .field-save-status.ok { color: #198754; }
+  .field-save-status.err { color: #dc3545; }
+  .editable-field:focus { outline: 2px solid #0d6efd80; }
+</style>
 <script>
 async function runComparison() {
   const btn = document.querySelector('[onclick="runComparison()"]');
@@ -308,5 +398,77 @@ async function runComparison() {
     btn.disabled = false;
   }
 }
+
+// ── Inline field auto-save ──────────────────────────────────────────────────
+async function autosaveProductField(field, value) {
+  const statusEl = document.querySelector(`.field-save-status[data-status-for="${field}"]`);
+  try {
+    const resp = await fetch('/products/{{ product.sku }}/field', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field, value }),
+    });
+    const data = await resp.json();
+    if (!statusEl) return;
+    if (!resp.ok || !data.saved) {
+      statusEl.textContent = '⚠ ' + (data.error || 'save failed');
+      statusEl.className = 'field-save-status small err';
+    } else if (data.violations && data.violations.length > 0) {
+      statusEl.textContent = '⚠ ' + data.violations.join('; ');
+      statusEl.className = 'field-save-status small err';
+    } else {
+      statusEl.textContent = '✓ saved';
+      statusEl.className = 'field-save-status small ok';
+    }
+  } catch (e) {
+    if (statusEl) {
+      statusEl.textContent = '⚠ ' + e.message;
+      statusEl.className = 'field-save-status small err';
+    }
+  }
+}
+
+document.querySelectorAll('.editable-field').forEach(el => {
+  const field = el.dataset.field;
+
+  const eventName = el.type === 'checkbox' ? 'change' : 'blur';
+  el.addEventListener(eventName, () => {
+    let value;
+    if (el.type === 'checkbox') {
+      value = el.checked;
+    } else if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      value = el.value;
+      if (field === 'tags') {
+        value = el.value.split(',').map(t => t.trim()).filter(Boolean);
+      }
+    } else {
+      value = el.innerText || el.textContent;
+    }
+    autosaveProductField(field, value);
+  });
+});
+
+// ── Copy-to-clipboard buttons ────────────────────────────────────────────────
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const field = btn.dataset.copyFor;
+    const el = document.getElementById('field-' + field);
+    if (!el) return;
+    let text;
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      text = el.value;
+    } else {
+      text = el.dataset.value != null ? el.dataset.value : (el.innerText || el.textContent);
+    }
+    try {
+      await navigator.clipboard.writeText(text.trim());
+      const original = btn.textContent;
+      btn.textContent = '✓ Copied';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch (e) {
+      btn.textContent = '✗ Copy failed';
+    }
+  });
+});
 </script>
 {% endblock %}

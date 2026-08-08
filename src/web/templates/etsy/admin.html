@@ -97,24 +97,7 @@
           </div>
         </div>
 
-        {% if remaining_today == 0 %}
-        <div class="alert alert-warning mb-0">Daily publish limit reached. Come back tomorrow.</div>
-        {% elif not connected %}
-        <div class="alert alert-secondary mb-0">Connect to Etsy to enable publishing.</div>
-        {% else %}
-        <form method="POST" action="/admin/etsy/publish">
-          <div class="mb-3">
-            <label class="form-label fw-semibold">Publish approved products</label>
-            <input type="text" name="skus_raw" class="form-control"
-                   placeholder="Leave blank for all approved, or enter: SKU-001, SKU-002, …">
-            <div class="form-text">Leaving blank will publish up to {{ remaining_today }} oldest-approved products.</div>
-          </div>
-          <button type="submit" class="btn btn-success"
-                  onclick="return confirm('Start bulk publish now?')">
-            🚀 Start Bulk Publish
-          </button>
-        </form>
-        {% endif %}
+        <div class="alert alert-secondary mb-0">Publishing is currently disabled.</div>
       </div>
     </div>
   </div>

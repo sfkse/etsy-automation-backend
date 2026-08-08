@@ -70,7 +70,7 @@
       <input type="text" name="name" class="form-control form-control-sm" placeholder="Preset name" required>
     </div>
     <div class="col-md-2">
-      <input type="text" name="category" class="form-control form-control-sm" placeholder="necklace">
+      <input type="text" name="category" class="form-control form-control-sm" placeholder="necklace" required>
     </div>
     <div class="col-md-2">
       <select name="material_type" class="form-select form-select-sm">
@@ -78,6 +78,10 @@
         <option value="{{ mt }}">{{ mt }}</option>
         {% endfor %}
       </select>
+    </div>
+    <div class="col-md-3">
+      <input type="text" name="finishes" class="form-control form-control-sm" placeholder="Gold, Silver, Rose"
+             data-array="csv" required>
     </div>
     <div class="col-md-2">
       <button type="submit" class="btn btn-sm btn-success">Add</button>

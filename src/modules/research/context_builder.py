@@ -15,9 +15,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from statistics import mean
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.db.models import KeywordResearch
+from src.db.models import KeywordResearch, Product
 from src.domain.carrier_pillar import CarrierPillar
 
 
@@ -125,17 +126,34 @@ class ResearchContextBuilder:
     def __init__(self, session: Session):
         self.session = session
 
-    def current_snapshot_id(self, pillar: str | CarrierPillar) -> str:
+    def _keywords_for_product(self, product: Product) -> list[str]:
+        """
+        Keyword list for a product, most-specific first: the exact keyword the
+        user researched (if set) followed by the pillar's default keywords as
+        a fallback so a product with no direct research is no worse off than
+        the pillar-only brief.
+        """
+        keywords: list[str] = []
+        target = getattr(product, "target_keyword", None)
+        if target:
+            keywords.append(target.strip().lower())
+        pillar = product.carrier_pillar
+        pillar_str = pillar.value if isinstance(pillar, CarrierPillar) else str(pillar)
+        for kw in _pillar_to_keywords(pillar_str):
+            if kw not in keywords:
+                keywords.append(kw)
+        return keywords
+
+    def current_snapshot_id(self, product: Product) -> str:
         """
         Return a snapshot identifier string for the research data used in generation.
         Based on the most recent ``last_analyzed_at`` timestamp of the relevant
         KeywordResearch rows. Returns ``"no-research"`` when no data exists.
         """
-        pillar_str = pillar.value if isinstance(pillar, CarrierPillar) else str(pillar)
-        keywords = _pillar_to_keywords(pillar_str)
+        keywords = self._keywords_for_product(product)
         rows = (
             self.session.query(KeywordResearch.last_analyzed_at)
-            .filter(KeywordResearch.keyword.in_(keywords))
+            .filter(func.lower(KeywordResearch.keyword).in_(keywords))
             .all()
         )
         timestamps = [r[0] for r in rows if r[0] is not None]
@@ -150,7 +168,7 @@ class ResearchContextBuilder:
 
         research_rows = (
             self.session.query(KeywordResearch)
-            .filter(KeywordResearch.keyword.in_(keywords))
+            .filter(func.lower(KeywordResearch.keyword).in_([k.lower() for k in keywords]))
             .all()
         )
 
@@ -173,11 +191,10 @@ class ResearchContextBuilder:
             avg_volume_by_position=_merge_avg_volume_by_position(research_rows),
         )
 
-    def build_for_carrier_pillar(self, pillar: str | CarrierPillar) -> ResearchContext:
-        """Convenience: map carrier pillar → default search keywords."""
-        pillar_str = pillar.value if isinstance(pillar, CarrierPillar) else str(pillar)
-        keywords = _pillar_to_keywords(pillar_str)
-        return self.build_for_keywords(keywords)
+    def build_for_product(self, product: Product) -> ResearchContext:
+        """Ground the brief in the product's researched target keyword first,
+        falling back to the carrier pillar's default keywords."""
+        return self.build_for_keywords(self._keywords_for_product(product))
 
 
 # ---------------------------------------------------------------------------
@@ -367,3 +384,37 @@ def build_sourcing_addendum(session: Session, selected_keyword_score_id: int) ->
             lines.append(f"    • {t}")
 
     return "\n".join(lines)
+
+
+def patch_research_builder_for_sourcing(orchestrator, sourcing_addendum: str) -> None:
+    """
+    Wrap the orchestrator's ResearchContextBuilder so every ``build_*`` call
+    appends the sourcing addendum to the returned ResearchContext.
+
+    Shared by both content-generation entry points — the classic
+    ``/products/{sku}/generate-content`` route and the extension's
+    ``/listings/build`` background pipeline — so keyword grounding behaves
+    identically regardless of how the product was created.
+    """
+    original_builder: ResearchContextBuilder = orchestrator.research
+
+    class _SourcingAwareBuilder(ResearchContextBuilder):
+        def build_for_product(self, product):
+            ctx = original_builder.build_for_product(product)
+            ctx.sourcing_addendum = sourcing_addendum
+            return ctx
+
+        def build_for_keywords(self, keywords):
+            ctx = original_builder.build_for_keywords(keywords)
+            ctx.sourcing_addendum = sourcing_addendum
+            return ctx
+
+        def current_snapshot_id(self, product) -> str:
+            return original_builder.current_snapshot_id(product)
+
+    patched = _SourcingAwareBuilder.__new__(_SourcingAwareBuilder)
+    patched.__dict__.update(original_builder.__dict__)
+    orchestrator.research = patched
+    orchestrator.title.research = patched
+    orchestrator.tag.research = patched
+    orchestrator.desc.research = patched

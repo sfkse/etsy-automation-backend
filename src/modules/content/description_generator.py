@@ -81,7 +81,7 @@ class DescriptionGenerator:
         echoes the same vocabulary — keeping the variant internally consistent.
         Up to 3 attempts; returns the last draft if all checks fail.
         """
-        research_ctx = self.research.build_for_carrier_pillar(product.carrier_pillar)
+        research_ctx = self.research.build_for_product(product)
         all_cliches = list(dict.fromkeys(
             CLICHE_DESCRIPTION_PHRASES + (research_ctx.cliches_to_avoid if research_ctx.has_data else [])
         ))

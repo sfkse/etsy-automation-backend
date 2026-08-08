@@ -54,6 +54,8 @@ PRODUCT:
 - Material: {{material}}
 - Features: {{features}}
 
+TARGET KEYWORD (must appear naturally, ideally within the first 60 characters): {{target_keyword}}
+
 STRICT RULES (must never be violated):
 1. Each title must be {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} characters (count carefully).
 2. Do NOT use any of these forbidden keywords: Stone, Mother's Day Gift, Diamond (for non-solid-gold), Floral (unless product has actual flowers).

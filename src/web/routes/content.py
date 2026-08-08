@@ -87,7 +87,10 @@ async def _run_content_pipeline(
     the winning keyword's empirical market data is injected into the research
     context so every LLM call is grounded in the chosen keyword.
     """
-    from src.modules.research.context_builder import build_sourcing_addendum
+    from src.modules.research.context_builder import (
+        build_sourcing_addendum,
+        patch_research_builder_for_sourcing,
+    )
 
     session = SessionLocal()
     try:
@@ -102,7 +105,7 @@ async def _run_content_pipeline(
         if selected_keyword_score_id:
             addendum = build_sourcing_addendum(session, selected_keyword_score_id)
             if addendum:
-                _patch_research_builder_for_sourcing(orchestrator, addendum)
+                patch_research_builder_for_sourcing(orchestrator, addendum)
 
         try:
             bundle = await orchestrator.generate_bundle(product)
@@ -126,40 +129,6 @@ async def _run_content_pipeline(
 
     finally:
         session.close()
-
-
-def _patch_research_builder_for_sourcing(
-    orchestrator,
-    sourcing_addendum: str,
-) -> None:
-    """
-    Wrap the orchestrator's ResearchContextBuilder so every build_* call
-    appends the sourcing addendum to the returned ResearchContext.
-    """
-    from src.modules.research.context_builder import ResearchContextBuilder
-
-    original_builder: ResearchContextBuilder = orchestrator.research
-
-    class _SourcingAwareBuilder(ResearchContextBuilder):
-        def build_for_carrier_pillar(self, pillar):
-            ctx = original_builder.build_for_carrier_pillar(pillar)
-            ctx.sourcing_addendum = sourcing_addendum
-            return ctx
-
-        def build_for_keywords(self, keywords):
-            ctx = original_builder.build_for_keywords(keywords)
-            ctx.sourcing_addendum = sourcing_addendum
-            return ctx
-
-        def current_snapshot_id(self, pillar) -> str:
-            return original_builder.current_snapshot_id(pillar)
-
-    patched = _SourcingAwareBuilder.__new__(_SourcingAwareBuilder)
-    patched.__dict__.update(original_builder.__dict__)
-    orchestrator.research = patched
-    orchestrator.title.research = patched
-    orchestrator.tag.research = patched
-    orchestrator.desc.research = patched
 
 
 # ── Content Generation Trigger ────────────────────────────────────────────────

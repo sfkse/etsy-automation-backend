@@ -41,7 +41,9 @@
         <!-- Middle: stats -->
         <div class="d-flex gap-4 text-center">
           <div>
-            <div class="fw-semibold">{{ item.image_count }}</div>
+            <div class="fw-semibold {% if item.low_images %}text-danger{% endif %}" {% if item.low_images %}title="Below the {{ min_images }}-image minimum"{% endif %}>
+              {{ item.image_count }}{% if item.low_images %} ⚠{% endif %}
+            </div>
             <div class="text-muted" style="font-size:.75rem;">Images</div>
           </div>
           <div>

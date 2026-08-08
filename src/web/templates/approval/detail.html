@@ -115,17 +115,6 @@
 
         </div><!-- /card-body -->
 
-        <!-- Etsy Payload Preview (lazy-loaded) -->
-        <details class="payload-preview mx-3 mb-2" data-variant-id="{{ vid }}" data-loaded="false">
-          <summary class="small text-muted" style="cursor:pointer;">
-            <span class="text-uppercase fw-semibold" style="letter-spacing:.05em;">Etsy payload preview</span>
-            <span class="badge bg-light text-dark border ms-1">JSON</span>
-          </summary>
-          <pre class="border rounded p-2 mt-2 small bg-light"
-               id="payload-json-{{ vid }}"
-               style="max-height:340px; overflow:auto; font-size:.72rem; white-space:pre-wrap;">Loading…</pre>
-        </details>
-
         <div class="card-footer bg-white border-top py-2">
           <button type="button"
                   class="btn btn-sm btn-outline-secondary w-100 open-hybrid-btn"
@@ -199,6 +188,11 @@
               regenerate / compare →
             </a>
           </label>
+          {% if low_images %}
+          <div class="alert alert-warning py-2 px-3 small mb-2">
+            ⚠ Only {{ images | length }} image{{ 's' if images | length != 1 else '' }} — the guide's minimum is {{ min_images }}. Consider adding more before approving.
+          </div>
+          {% endif %}
           {% if images %}
           <div class="d-flex flex-wrap gap-2">
             {% for img in images[:9] %}
@@ -766,28 +760,6 @@ document.getElementById('approve-form').addEventListener('submit', function(e) {
     });
     document.getElementById('overrides-json-input').value = JSON.stringify(overrides);
   }
-});
-
-
-// ── Etsy Payload Preview (lazy load on <details> open) ───────────────────────
-document.querySelectorAll('details.payload-preview').forEach(d => {
-  d.addEventListener('toggle', async () => {
-    if (!d.open || d.dataset.loaded === 'true') return;
-    const vid = d.dataset.variantId;
-    const pre = document.getElementById('payload-json-' + vid);
-    try {
-      const resp = await fetch(`/approval/${SKU}/payload-preview?variant_id=${encodeURIComponent(vid)}`);
-      if (!resp.ok) {
-        pre.textContent = `Error ${resp.status}: ${await resp.text()}`;
-        return;
-      }
-      const data = await resp.json();
-      pre.textContent = JSON.stringify(data, null, 2);
-      d.dataset.loaded = 'true';
-    } catch (e) {
-      pre.textContent = 'Failed to load: ' + e.message;
-    }
-  });
 });
 
 

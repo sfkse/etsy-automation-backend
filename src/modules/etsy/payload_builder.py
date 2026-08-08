@@ -5,9 +5,9 @@ Consolidates Shop Settings, DefaultAttributes, PersonalizationTemplate,
 VariationPreset, and VariationRow rows into the exact JSON payload that
 Etsy's create/update-listing endpoints expect.
 
-Only used when a product carries `variation_preset_id` (new Listing Builder
-flow). Legacy `/products/new` products fall back to the pre-existing
-publisher path.
+Only used when a product carries `variation_preset_id` (Listing Builder
+flow). Products without a variation matrix (legacy rows predating the
+Listing Builder) fall back to the pre-existing publisher path.
 """
 from __future__ import annotations
 

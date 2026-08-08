@@ -8,6 +8,7 @@ GET  /sourcing/{analysis_id}      — Poll analysis status + results
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import date, datetime
 
 import structlog
@@ -46,6 +47,7 @@ async def _build_analysis_from_inputs(
     rexven_url: str | None,
     rexven_sku: str | None,
     image: UploadFile | None,
+    image_url: str | None = None,
 ) -> SourcingAnalysis:
     """Create and persist a SourcingAnalysis from whichever input was provided."""
     from src.db.models import Product
@@ -96,6 +98,20 @@ async def _build_analysis_from_inputs(
     elif image:
         analysis.image_path = await save_uploaded_image(image)
 
+    elif image_url:
+        # Direct image URL captured from the rendered Rexven page DOM (the
+        # browser extension can read the SPA's real image URL that a server-side
+        # scrape can't). Download it here — httpx isn't subject to browser CORS,
+        # so this succeeds where an in-page fetch of the CDN gets blocked.
+        analysis.image_url = image_url
+        try:
+            analysis.image_path = download_remote_image(image_url)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not download product image: {e}",
+            ) from e
+
     if not analysis.image_path:
         raise HTTPException(
             status_code=422,
@@ -117,16 +133,17 @@ async def suggest_keywords(
     rexven_url: str | None = Form(None),
     rexven_sku: str | None = Form(None),
     image: UploadFile | None = File(None),
+    image_url: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     """
     Layer A standalone — produce 15 keyword candidates from a Rexven product image.
-    Accepts one of: rexven_url, rexven_sku, or direct image upload.
+    Accepts one of: rexven_url, rexven_sku, direct image upload, or image_url.
     """
-    if not any([rexven_url, rexven_sku, image]):
-        raise HTTPException(status_code=400, detail="Provide rexven_url, rexven_sku, or image file")
+    if not any([rexven_url, rexven_sku, image, image_url]):
+        raise HTTPException(status_code=400, detail="Provide rexven_url, rexven_sku, image file, or image_url")
 
-    analysis = await _build_analysis_from_inputs(session, rexven_url, rexven_sku, image)
+    analysis = await _build_analysis_from_inputs(session, rexven_url, rexven_sku, image, image_url)
 
     suggester = VisionKeywordSuggester(session, api_key=_settings.ANTHROPIC_API_KEY)
     try:
@@ -163,6 +180,7 @@ async def analyze_product(
     rexven_url: str | None = Form(None),
     rexven_sku: str | None = Form(None),
     image: UploadFile | None = File(None),
+    image_url: str | None = Form(None),
     force_refresh: bool = Form(False),
     session: Session = Depends(get_session),
 ):
@@ -172,10 +190,10 @@ async def analyze_product(
     - Layers B and C run in a background task.
     - Returns analysis_id immediately; client should poll GET /sourcing/{id}.
     """
-    if not any([rexven_url, rexven_sku, image]):
-        raise HTTPException(status_code=400, detail="Provide rexven_url, rexven_sku, or image file")
+    if not any([rexven_url, rexven_sku, image, image_url]):
+        raise HTTPException(status_code=400, detail="Provide rexven_url, rexven_sku, image file, or image_url")
 
-    analysis = await _build_analysis_from_inputs(session, rexven_url, rexven_sku, image)
+    analysis = await _build_analysis_from_inputs(session, rexven_url, rexven_sku, image, image_url)
 
     # Layer A: fast (~3-5s), run synchronously before returning
     suggester = VisionKeywordSuggester(session, api_key=_settings.ANTHROPIC_API_KEY)
@@ -237,6 +255,82 @@ def _run_layer_b_and_c(analysis_id: int) -> None:
         session.close()
 
 
+# CLIP image-image cosine for same-category jewelry thumbnails clusters well
+# below 1.0; 0.70 filtered out nearly everything. 0.60 keeps genuinely-similar
+# products while still excluding unrelated ones. Tune from the
+# `visual_similarity_complete` log (candidates vs above_threshold).
+_LAYER_C_MIN_SIMILARITY = 0.60
+
+# Relevance re-rank tuning. `visual_similarity_support` = how many of the top-50
+# most visually-similar Etsy listings were found under a keyword — a strong signal
+# the keyword actually describes the product. We blend it into the ranking so
+# generic catch-alls ("gifts for her") that score well on market structure but
+# return off-target listings get demoted below on-target keywords.
+_SUPPORT_SATURATION = 5   # support at/above this = full relevance weight
+_RELEVANCE_FLOOR = 0.2    # zero-support keywords keep this fraction (CLIP misses happen)
+
+
+def _rerank_by_visual_relevance(scores: list) -> None:
+    """Reassign ``rank_in_recommendation`` by opportunity_score × visual relevance.
+
+    If Layer C produced no signal (all support 0/None), the factor is uniform and
+    the opportunity_score order is preserved — so this is safe when CLIP is absent.
+    """
+    def blended(s):
+        support = s.visual_similarity_support or 0
+        relevance = min(1.0, support / _SUPPORT_SATURATION)
+        factor = _RELEVANCE_FLOOR + (1 - _RELEVANCE_FLOOR) * relevance
+        return (s.opportunity_score or 0) * factor
+
+    for i, s in enumerate(sorted(scores, key=blended, reverse=True), start=1):
+        s.rank_in_recommendation = i
+
+
+def _embed_analysis_listings(session, embedder, analysis_id: int) -> None:
+    """CLIP-embed this analysis's competitor listings that still lack an embedding.
+
+    Without this, ``CompetitorListing.image_embedding`` is only ever populated by
+    the manual ``backfill_embeddings`` script, so ``find_similar`` finds nothing and
+    Layer C is a silent no-op (``visual_similarity_no_embeddings``). Scoped to the
+    one analysis so the cost is bounded to the freshly-ingested listings.
+    """
+    listings = (
+        session.query(CompetitorListing)
+        .filter(
+            CompetitorListing.sourcing_analysis_id == analysis_id,
+            CompetitorListing.image_embedding.is_(None),
+            CompetitorListing.image_url.isnot(None),
+            CompetitorListing.image_url != "",
+        )
+        .all()
+    )
+    if not listings:
+        return
+
+    embedded = 0
+    failed = 0
+    for listing in listings:
+        try:
+            emb = embedder.embed_image_url(listing.image_url)
+            listing.image_embedding = emb.tolist()
+            listing.image_embedding_model = embedder.MODEL_NAME
+            listing.image_embedding_computed_at = datetime.utcnow()
+            embedded += 1
+        except Exception as e:
+            # [] sentinel = "tried and failed" (vs NULL = "not yet tried").
+            listing.image_embedding = []
+            listing.image_embedding_computed_at = datetime.utcnow()
+            failed += 1
+            _log.warning("layer_c_embed_failed", listing_id=listing.listing_id, error=str(e))
+    session.commit()
+    _log.info(
+        "layer_c_embeddings_computed",
+        analysis_id=analysis_id,
+        embedded=embedded,
+        failed=failed,
+    )
+
+
 def _run_layer_c(session, analysis: SourcingAnalysis, scores: list) -> None:
     """Attempt Layer C CLIP enrichment. Fails gracefully if model unavailable."""
     try:
@@ -248,10 +342,15 @@ def _run_layer_c(session, analysis: SourcingAnalysis, scores: list) -> None:
         session.commit()
 
         embedder = ClipEmbedder()
+
+        # Populate embeddings for this analysis's listings first — otherwise the
+        # search below has nothing to compare the Rexven image against.
+        _embed_analysis_listings(session, embedder, analysis.id)
+
         searcher = VisualSimilaritySearch(session, embedder)
 
         similar = searcher.find_similar(
-            analysis.image_path, top_k=50, min_similarity=0.70
+            analysis.image_path, top_k=50, min_similarity=_LAYER_C_MIN_SIMILARITY
         )
 
         # Enrich existing scores with rank predictions
@@ -277,6 +376,11 @@ def _run_layer_c(session, analysis: SourcingAnalysis, scores: list) -> None:
                 )
                 session.add(novel_candidate)
 
+        # Re-rank recommendations now that visual relevance is known — otherwise
+        # the top-5 stays ordered by market structure and surfaces off-target
+        # generic keywords above the ones that actually match the product.
+        _rerank_by_visual_relevance(scores)
+
         analysis.layer_c_completed = True
         session.commit()
         _log.info("layer_c_complete", analysis_id=analysis.id, similar_count=len(similar))
@@ -294,6 +398,49 @@ def _run_layer_c(session, analysis: SourcingAnalysis, scores: list) -> None:
 # ---------------------------------------------------------------------------
 # Ingest extension Phase-1 cards + run Layer B+C
 # ---------------------------------------------------------------------------
+
+def _price_str_to_cents(text) -> "int | None":
+    """Parse a formatted/screen-reader price ('$20.67', 'Sale Price 20,67 US$') → cents.
+
+    Treats a trailing group of 1–2 digits after the last separator as the decimal
+    part; anything longer (e.g. '1,234') is thousands, so it's whole dollars.
+    """
+    if not text:
+        return None
+    cleaned = re.sub(r"[^\d.,]", "", str(text))
+    if not cleaned:
+        return None
+    cleaned = cleaned.replace(",", ".")
+    parts = cleaned.rsplit(".", 1)
+    if len(parts) == 2 and 1 <= len(parts[1]) <= 2:
+        integer_part = parts[0].replace(".", "")
+        decimal_part = parts[1].ljust(2, "0")
+        try:
+            return int(integer_part or "0") * 100 + int(decimal_part)
+        except ValueError:
+            return None
+    try:
+        return int(cleaned.replace(".", "")) * 100
+    except ValueError:
+        return None
+
+
+def _card_price_cents(card: dict) -> "int | None":
+    """Resolve a listing price in cents from an extension search card.
+
+    Prefers the numeric ``price_cents`` (decoded from Etsy's impression blob, only
+    present on some cards), then falls back to parsing the formatted / screen-reader
+    price strings — otherwise the price sub-score has no data to work with.
+    """
+    pc = card.get("price_cents")
+    if isinstance(pc, (int, float)) and pc > 0:
+        return int(pc)
+    for key in ("price_formatted", "price", "original_price_formatted", "original_price"):
+        cents = _price_str_to_cents(card.get(key))
+        if cents:
+            return cents
+    return None
+
 
 def _card_to_listing_from_extension(
     card: dict,
@@ -320,7 +467,8 @@ def _card_to_listing_from_extension(
         image_url=card.get("image_url") or "",
         shop_name=card.get("shop_name") or card.get("shop") or None,
         shop_id=str(card.get("shop_id") or "") or None,
-        price_cents=card.get("price_cents"),
+        shop_age_years=card.get("shop_age_years"),
+        price_cents=_card_price_cents(card),
         currency=card.get("currency"),
         rating=card.get("rating"),
         review_count=card.get("review_count"),
@@ -395,6 +543,136 @@ async def ingest_and_score(
         "cards_received": len(cards),
         "cards_ingested": ingested,
         "message": "Cards ingested. Layer B+C scoring running in background.",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Phase-2 deep-dive on the chosen keyword (targeted, before Build)
+# ---------------------------------------------------------------------------
+
+def _listing_id_from_url(url) -> "str | None":
+    if not url:
+        return None
+    m = re.search(r"/listing/(\d+)", str(url))
+    return m.group(1) if m else None
+
+
+def _detail_to_listing_fields(detail: dict) -> dict:
+    """Map an extension ListingDetail (Phase 2) to CompetitorListing columns."""
+    fields = {
+        "tags": detail.get("tags") or None,
+        "tag_volumes": detail.get("tag_volumes") or None,
+        "description_text": detail.get("description_text") or None,
+        "description_length": detail.get("description_length"),
+        "image_count": detail.get("image_count"),
+        "views_24h_count": detail.get("views_24h_count") or None,
+        "cart_count": detail.get("cart_count"),
+        "stock_warning": detail.get("stock_warning") or None,
+        "shop_total_sales": detail.get("shop_total_sales"),
+        "has_sale_countdown": detail.get("has_sale_countdown") or None,
+        "personalization_required": detail.get("personalization_required") or None,
+        "eh_detail_total_sales": detail.get("eh_detail_total_sales"),
+        "eh_detail_total_reviews": detail.get("eh_detail_total_reviews"),
+        "eh_detail_total_favorites": detail.get("eh_detail_total_favorites"),
+        "eh_detail_review_ratio": detail.get("eh_detail_review_ratio"),
+        "eh_detail_category": detail.get("eh_detail_category"),
+        "eh_detail_stocks": detail.get("eh_detail_stocks"),
+        "eh_detail_conv_rate": detail.get("eh_detail_conv_rate"),
+    }
+    rd = detail.get("eh_detail_release_date")
+    if rd:
+        try:
+            fields["eh_detail_release_date"] = date.fromisoformat(str(rd)[:10])
+        except (ValueError, TypeError):
+            pass
+    return {k: v for k, v in fields.items() if v is not None}
+
+
+def _demand_summary(research) -> dict:
+    """Compact demand read for the checkpoint, from a refreshed KeywordResearch."""
+    if research is None:
+        return {"competitor_tags": [], "volume_tiers": None, "has_volume": False}
+    ttf = research.top_tags_by_frequency or {}
+    competitor_tags = [t for t, _ in (ttf.get("all_tags_frequency") or [])[:12]]
+    vs = research.volume_stratified_tags or {}
+    volume_tiers = (
+        {tier: len(vs.get(tier) or []) for tier in ("mainstream", "medium", "niche")}
+        if vs else None
+    )
+    return {
+        "competitor_tags": competitor_tags,
+        "volume_tiers": volume_tiers,
+        "has_volume": bool(vs),
+    }
+
+
+@router.get("/keyword-score/{score_id}/phase2-targets")
+def phase2_targets(
+    score_id: int,
+    limit: int = 10,
+    session: Session = Depends(get_session),
+):
+    """Return the chosen keyword + its top-N competitor listing URLs to deep-dive."""
+    score = session.query(KeywordScore).filter_by(id=score_id).first()
+    if not score:
+        raise HTTPException(status_code=404, detail=f"KeywordScore {score_id} not found")
+    limit = max(1, min(limit, 20))
+    rows = (
+        session.query(CompetitorListing)
+        .filter(CompetitorListing.keyword_searched == score.keyword)
+        .order_by(CompetitorListing.rank_in_search.asc().nullslast())
+        .limit(limit)
+        .all()
+    )
+    urls = [r.url for r in rows if r.url]
+    return JSONResponse({"keyword": score.keyword, "urls": urls})
+
+
+@router.post("/keyword-score/{score_id}/ingest-phase2")
+async def ingest_phase2(
+    score_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Merge Phase-2 listing details into the keyword's competitor rows, then
+    refresh KeywordResearch so the build is richly grounded.
+
+    Body: { "details": [ <extension ListingDetail>, ... ] }
+    """
+    from src.modules.research.csv_import import merge_listing
+    from src.modules.research.pipeline import refresh_keyword_research
+    from src.modules.research.scoring import compute_sales_signal_score
+    from src.utils.llm_client import get_llm_client
+
+    score = session.query(KeywordScore).filter_by(id=score_id).first()
+    if not score:
+        raise HTTPException(status_code=404, detail=f"KeywordScore {score_id} not found")
+
+    body = await request.json()
+    details: list[dict] = body.get("details", [])
+
+    updated = 0
+    for detail in details:
+        lid = _listing_id_from_url(detail.get("url"))
+        if not lid:
+            continue
+        row = session.query(CompetitorListing).filter_by(listing_id=lid).first()
+        if row is None:
+            continue  # only enrich listings we already scraped in Phase 1
+        incoming = CompetitorListing(listing_id=lid, **_detail_to_listing_fields(detail))
+        merge_listing(row, incoming)
+        row.sales_signal_score = compute_sales_signal_score(row)
+        updated += 1
+    session.commit()
+    _log.info("ingest_phase2", score_id=score_id, keyword=score.keyword, received=len(details), updated=updated)
+
+    research = await refresh_keyword_research(session, score.keyword, get_llm_client())
+
+    return JSONResponse({
+        "keyword": score.keyword,
+        "details_received": len(details),
+        "listings_enriched": updated,
+        **_demand_summary(research),
     })
 
 

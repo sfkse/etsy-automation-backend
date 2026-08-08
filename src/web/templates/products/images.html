@@ -36,6 +36,8 @@
         {% endif %}
       </div>
       <div class="card-footer bg-white border-top">
+        <textarea class="form-control form-control-sm slot-instructions mb-2" rows="2"
+                  placeholder="Extra instructions (e.g. warmer lighting, model looking left)">{{ s.instructions }}</textarea>
         <div class="input-group input-group-sm mb-2">
           <select class="form-select slot-workflow">
             {% for wf in workflows %}
@@ -87,9 +89,10 @@ document.querySelectorAll(".btn-regenerate").forEach(btn => {
     const card = btn.closest("[data-slot]");
     const slot = card.dataset.slot;
     const workflow = card.querySelector(".slot-workflow").value;
+    const instructions = card.querySelector(".slot-instructions").value;
     setBusy(card, true);
     try {
-      const r = await postForm(`/products/${SKU}/images/regenerate`, { slot, workflow });
+      const r = await postForm(`/products/${SKU}/images/regenerate`, { slot, workflow, instructions });
       if (r.error) { alert("Regenerate failed: " + r.error); return; }
       setImage(card, r.cache_url || r.url);
       card.querySelector(".slot-backend").textContent = workflow;
@@ -103,11 +106,12 @@ document.querySelectorAll(".btn-compare").forEach(btn => {
     const slot = card.dataset.slot;
     const box = card.querySelector(".slot-candidates");
     const row = card.querySelector(".candidate-row");
+    const instructions = card.querySelector(".slot-instructions").value;
     setBusy(card, true);
     box.classList.remove("d-none");
     row.innerHTML = '<div class="text-muted small">Generating with all backends…</div>';
     try {
-      const r = await postForm(`/products/${SKU}/images/compare`, { slot });
+      const r = await postForm(`/products/${SKU}/images/compare`, { slot, instructions });
       if (r.error) { row.innerHTML = '<div class="text-danger small">' + r.error + '</div>'; return; }
       row.innerHTML = "";
       r.candidates.forEach(c => {
@@ -131,7 +135,7 @@ document.querySelectorAll(".btn-compare").forEach(btn => {
           const workflow = ub.dataset.wf;
           setBusy(card, true);
           try {
-            const sel = await postForm(`/products/${SKU}/images/select`, { slot, workflow });
+            const sel = await postForm(`/products/${SKU}/images/select`, { slot, workflow, instructions });
             if (sel.error) { alert("Select failed: " + sel.error); return; }
             setImage(card, sel.cache_url || sel.url);
             card.querySelector(".slot-backend").textContent = workflow;

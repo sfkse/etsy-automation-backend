@@ -81,6 +81,63 @@ def _get_or_create_settings(session: Session) -> ShopSettings:
     return row
 
 
+def compute_preflight(session: Session) -> dict:
+    """Report shop-settings gaps that would break a build or publish.
+
+    DB-only (no Etsy API calls). The two user-required entries are the
+    Etsy-account-specific IDs the seed can't fill; the rest are defensive
+    checks that only trip if ``seed_shop_defaults.seed_all`` never ran.
+    Returns ``{"ready": bool, "missing": [{key, label, tab, why}, ...]}``.
+    """
+    settings = session.query(ShopSettings).filter_by(id=1).first()
+    missing: list[dict] = []
+
+    def _blank(value) -> bool:
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    if settings is None:
+        missing.append({
+            "key": "shop_settings",
+            "label": "Shop Settings",
+            "tab": "operations",
+            "why": "No shop settings row — run seed_shop_defaults.seed_all.",
+        })
+
+    if settings is None or _blank(settings.production_partner_id):
+        missing.append({
+            "key": "production_partner_id",
+            "label": "Production Partner",
+            "tab": "production-partner",
+            "why": "Etsy rejects new listings without a production partner ID.",
+        })
+
+    if settings is None or _blank(settings.default_shipping_profile_id):
+        missing.append({
+            "key": "default_shipping_profile_id",
+            "label": "Shipping Profile",
+            "tab": "operations",
+            "why": "Listings can't publish without a shipping profile.",
+        })
+
+    if session.query(PricingStrategy).first() is None:
+        missing.append({
+            "key": "pricing_strategy",
+            "label": "Pricing Strategy",
+            "tab": "pricing-strategy",
+            "why": "Missing pricing rules — run seed_shop_defaults.seed_all.",
+        })
+
+    if session.query(VariationPreset).first() is None:
+        missing.append({
+            "key": "variation_presets",
+            "label": "Variation Presets",
+            "tab": "variation-presets",
+            "why": "No variation presets — run seed_shop_defaults.seed_all.",
+        })
+
+    return {"ready": len(missing) == 0, "missing": missing}
+
+
 # ── 1. Production Partner ────────────────────────────────────────────────────
 
 
@@ -237,10 +294,24 @@ def save_variation_preset(
     session: Session = Depends(get_session),
 ):
     row = session.query(VariationPreset).filter_by(name=name).first()
-    if row is None:
+    is_new = row is None
+    if is_new:
         row = VariationPreset(name=name)
         session.add(row)
     _apply_updates(row, payload, _VARIATION_FIELDS)
+
+    # `finishes` is required (NOT NULL) — a preset with no finishes builds an empty
+    # variation matrix. Reject clearly instead of letting the DB raise a 500.
+    if not row.finishes:
+        session.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="At least one finish is required (e.g. \"Gold, Silver, Rose\").",
+        )
+    if is_new and not row.category:
+        session.rollback()
+        raise HTTPException(status_code=400, detail="A category is required (e.g. \"necklace\").")
+
     session.commit()
     # Re-price products that use this preset so finish/length/multi-count edits
     # propagate to their stored variation matrix + selling_price.
@@ -354,6 +425,15 @@ def save_operations(patch: OperationsPatch, session: Session = Depends(get_sessi
     _apply_updates(row, patch.model_dump(exclude_none=True), _OPERATIONS_FIELDS)
     session.commit()
     return get_operations(session)
+
+
+# ── Preflight (required-settings check for the extension build gate) ──────────
+
+
+@router.get("/preflight")
+def get_preflight(session: Session = Depends(get_session)):
+    """Report whether required shop settings are in place before a build."""
+    return compute_preflight(session)
 
 
 # ── 8. Shop Sections ─────────────────────────────────────────────────────────

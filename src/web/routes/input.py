@@ -2,8 +2,6 @@
 Product Input Module Routes (Phase 4)
 
 GET  /products              — list all products
-GET  /products/new          — manual input form
-POST /products/new          — create product from form
 GET  /products/{sku}        — product detail
 POST /products/{sku}/process — trigger pipeline (stub → Phase 5 fills in real logic)
 GET  /products/{sku}/progress — polling progress page
@@ -15,7 +13,7 @@ import asyncio
 import shutil
 from pathlib import Path as _DeletePath
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -31,7 +29,6 @@ from src.db.models import (
     RenewLog,
     VariationRow,
 )
-from src.domain.carrier_pillar import CarrierPillar
 from src.modules.images.comparison import run_comparison
 from src.modules.images.pipeline import run_image_pipeline
 from src.modules.images.regenerate import (
@@ -41,7 +38,11 @@ from src.modules.images.regenerate import (
     select_candidate,
     valid_slot,
 )
-from src.modules.input import generate_sku, save_product_images
+from src.modules.products.service import (
+    EDITABLE_PRODUCT_FIELDS,
+    update_product_field,
+    validate_product_field,
+)
 from src.modules.sheets.sync import upsert_product_row
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -60,31 +61,6 @@ def _tmpl(name: str, request: Request, context: dict, **kwargs) -> HTMLResponse:
 _settings = Settings()
 
 # ── Dropdown option lists ──────────────────────────────────────────────────────
-
-PILLAR_OPTIONS = [p.value for p in CarrierPillar]
-
-MATERIAL_OPTIONS = ["Gold Plated", "Brass", "925 Sterling Silver"]
-
-SHAPE_OPTIONS = [
-    "Round", "Oval", "Square", "Heart", "Star", "Cross",
-    "Leaf", "Moon", "Flower", "Teardrop", "Rectangle", "Custom",
-]
-
-STYLE_OPTIONS = [
-    "Minimalist", "Personalized", "Floral", "Bohemian",
-    "Classic", "Modern", "Vintage", "Statement",
-]
-
-OCCASION_OPTIONS = [
-    "Birthday", "Anniversary", "Wedding", "Everyday",
-    "Religious", "Pet Memorial", "Graduation", "Gifts for Mom",
-    "Valentine's Day", "Christmas",
-]
-
-RECIPIENT_OPTIONS = [
-    "For Her", "For Him", "For Mom", "For Sister",
-    "For Best Friend", "For Wife", "For Daughter", "Unisex",
-]
 
 WORKFLOW_OPTIONS = ["gemini", "openai", "flux"]
 
@@ -139,101 +115,6 @@ async def product_list(
     )
 
 
-# ── New Product Form ───────────────────────────────────────────────────────────
-
-@router.get("/new", response_class=HTMLResponse)
-async def new_product_form(request: Request):
-    return _tmpl(
-        "products/new.html", request,
-        {
-            "error": None,
-            "pillar_options": PILLAR_OPTIONS,
-            "material_options": MATERIAL_OPTIONS,
-            "shape_options": SHAPE_OPTIONS,
-            "style_options": STYLE_OPTIONS,
-            "occasion_options": OCCASION_OPTIONS,
-            "recipient_options": RECIPIENT_OPTIONS,
-        },
-    )
-
-
-@router.post("/new", response_class=HTMLResponse)
-async def create_product(
-    request: Request,
-    carrier_pillar: str = Form(...),
-    material: str = Form(...),
-    color: str = Form(""),
-    has_stone: bool = Form(False),
-    stone_type: str = Form(""),
-    shape: str = Form(""),
-    style: str = Form(""),
-    occasion: list[str] = Form(default=[]),
-    recipient: str = Form(""),
-    size_info: str = Form(""),
-    cost: float = Form(...),
-    selling_price: float = Form(...),
-    primary_image: UploadFile = File(...),
-    extra_images: list[UploadFile] = File(default=[]),
-    session: Session = Depends(get_session),
-):
-    # Validate primary image
-    if not primary_image.filename:
-        return _tmpl(
-            "products/new.html", request,
-            {
-                "error": "At least one product image is required.",
-                "pillar_options": PILLAR_OPTIONS,
-                "material_options": MATERIAL_OPTIONS,
-                "shape_options": SHAPE_OPTIONS,
-                "style_options": STYLE_OPTIONS,
-                "occasion_options": OCCASION_OPTIONS,
-                "recipient_options": RECIPIENT_OPTIONS,
-            },
-            status_code=422,
-        )
-
-    sku = generate_sku(session)
-
-    saved = await save_product_images(
-        sku=sku,
-        primary_file=primary_image,
-        extra_files=extra_images,
-        images_dir=_settings.IMAGES_DIR,
-    )
-
-    product = Product(
-        sku=sku,
-        carrier_pillar=carrier_pillar,
-        material=material,
-        color=color or None,
-        has_stone=has_stone,
-        stone_type=stone_type or None,
-        shape=shape or None,
-        style=style or None,
-        occasion=", ".join(occasion) if occasion else None,
-        recipient=recipient or None,
-        size_info=size_info or None,
-        cost=cost,
-        selling_price=selling_price,
-        status=ProductStatus.MANUAL_INPUT.value,
-    )
-    session.add(product)
-    session.flush()  # get product.id
-
-    for img_data in saved:
-        session.add(ProductImage(
-            product_id=product.id,
-            file_path=img_data["file_path"],
-            rank=img_data["rank"],
-            is_real=img_data["is_real"],
-            is_selected=img_data["rank"] == 1,
-        ))
-
-    session.commit()
-    upsert_product_row(product, _settings)
-    return RedirectResponse(url=f"/products/{sku}", status_code=303)
-
-
 # ── Product Detail ─────────────────────────────────────────────────────────────
 
 @router.get("/{sku}", response_class=HTMLResponse)
@@ -274,6 +155,41 @@ async def product_detail(
             "default_workflow": _settings.DEFAULT_IMAGE_WORKFLOW,
         },
     )
+
+
+# ── Inline field auto-save (post-approval editing) ─────────────────────────────
+
+@router.patch("/{sku}/field")
+async def autosave_product_field(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    if product.status not in (ProductStatus.APPROVED.value, ProductStatus.PUBLISHED.value):
+        return JSONResponse(
+            {"error": f"editing not allowed in status '{product.status}'"},
+            status_code=409,
+        )
+
+    body = await request.json()
+    field = body.get("field")
+    value = body.get("value")
+
+    if not field or value is None:
+        return JSONResponse({"error": "field and value required"}, status_code=422)
+    if field not in EDITABLE_PRODUCT_FIELDS:
+        return JSONResponse({"error": f"field '{field}' is not editable"}, status_code=422)
+
+    ok, violations = validate_product_field(field, value)
+    updated, coerced, err = update_product_field(session, product, field, value)
+    if not updated:
+        return JSONResponse({"saved": False, "error": err}, status_code=422)
+
+    return JSONResponse({"saved": True, "valid": ok, "violations": violations})
 
 
 # ── Process Product ────────────────────────────────────────────────────────────
@@ -482,11 +398,18 @@ async def images_page(
         url = None
         if row and row.file_path:
             url = "/images/" + row.file_path.split("data/images/")[-1]
+            # Cache-bust by file mtime so a regenerated (overwritten-in-place) photo
+            # shows on refresh instead of the browser's cached copy of the same URL.
+            try:
+                url += f"?v={int(_DeletePath(row.file_path).stat().st_mtime)}"
+            except OSError:
+                pass
         slots.append({
             "slot": slot,
             "label": slot.replace("-", " ").title(),
             "url": url,
             "workflow": row.workflow_source if row else None,
+            "instructions": (row.regen_instructions if row else "") or "",
         })
 
     return _tmpl(
@@ -506,6 +429,7 @@ async def images_regenerate(
     sku: str,
     slot: str = Form(...),
     workflow: str = Form(...),
+    instructions: str = Form(""),
     session: Session = Depends(get_session),
 ):
     product = session.query(Product).filter_by(sku=sku).first()
@@ -514,7 +438,7 @@ async def images_regenerate(
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
     try:
-        row = await regenerate_slot(product, session, _settings, slot, workflow)
+        row = await regenerate_slot(product, session, _settings, slot, workflow, instructions)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": str(exc)}, status_code=500)
     url = "/images/" + row.file_path.split("data/images/")[-1]
@@ -529,6 +453,7 @@ async def images_regenerate(
 async def images_compare(
     sku: str,
     slot: str = Form(...),
+    instructions: str = Form(""),
     session: Session = Depends(get_session),
 ):
     product = session.query(Product).filter_by(sku=sku).first()
@@ -536,7 +461,9 @@ async def images_compare(
         return JSONResponse({"error": "not found"}, status_code=404)
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
-    candidates = await generate_slot_candidates(product, session, _settings, slot)
+    candidates = await generate_slot_candidates(
+        product, session, _settings, slot, instructions=instructions
+    )
     return JSONResponse({
         "slot": slot,
         "candidates": [
@@ -559,6 +486,7 @@ async def images_select(
     sku: str,
     slot: str = Form(...),
     workflow: str = Form(...),
+    instructions: str = Form(""),
     session: Session = Depends(get_session),
 ):
     product = session.query(Product).filter_by(sku=sku).first()
@@ -567,7 +495,7 @@ async def images_select(
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
     try:
-        row = select_candidate(product, session, _settings, slot, workflow)
+        row = select_candidate(product, session, _settings, slot, workflow, instructions)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": str(exc)}, status_code=500)
     url = "/images/" + row.file_path.split("data/images/")[-1]

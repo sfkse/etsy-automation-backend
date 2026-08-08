@@ -107,8 +107,10 @@ _P = PALETTES[ACTIVE_PALETTE]
 # palette so the six shots colour-match each other.
 
 _MANNEQUIN_PROMPTS = [
-    f"Front-facing portrait of a woman wearing the necklace, {_P.lighting}, "
-    f"plain {_P.background}, professional jewelry catalog photography",
+    f"Close-up of a woman gently holding the necklace pendant between her thumb and "
+    f"forefinger near her collarbone, pendant sharp and centered against softly blurred "
+    f"skin, shallow depth of field, natural manicured nails, gentle {_P.lighting}, "
+    f"{_P.background}, intimate tactile editorial close-up",
     f"Three-quarter angle of a woman wearing the necklace, {_P.lighting}, "
     f"{_P.background}, editorial lifestyle photography",
     f"Close-up bust shot focused on the necklace against skin, gentle {_P.lighting}, "

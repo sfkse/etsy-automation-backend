@@ -117,6 +117,7 @@ class Product(Base):
     supplier_product_cents = Column(Integer, nullable=True)      # Rexven Premium "Product Price" in cents
     supplier_shipping_cents = Column(Integer, nullable=True)     # Rexven Premium "Shipping Price" in cents
     supplier_total_cents = Column(Integer, nullable=True)        # Rexven Premium "Total Price" in cents
+    selected_keyword_score_id = Column(Integer, nullable=True)   # Phase 4 sourcing: KeywordScore chosen to ground content generation
 
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
@@ -137,6 +138,10 @@ class ProductImage(Base):
     workflow_source = Column(String(20))
     alt_text = Column(String(250))
     is_selected = Column(Boolean, default=False)
+
+    # User-supplied art direction appended to the slot's built-in prompt on the
+    # last regenerate — persisted so the images page can pre-fill it for iteration.
+    regen_instructions = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

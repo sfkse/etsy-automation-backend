@@ -19,6 +19,7 @@ from src.config.business_rules import (
     SOLID_GOLD_PLATED_CONFLICT,
     TAG_COUNT,
     TAG_MAX_LENGTH,
+    TITLE_FIRST_NICHE_CHARS,
     TITLE_MAX_LENGTH,
     TITLE_MIN_LENGTH,
 )
@@ -33,9 +34,16 @@ _STOP_WORDS: frozenset[str] = frozenset(
 # ─── Title ────────────────────────────────────────────────────────────────────
 
 
-def validate_title(title: str) -> tuple[bool, list[str]]:
+def validate_title(
+    title: str, target_keyword: str | None = None
+) -> tuple[bool, list[str]]:
     """
     Validate *title* against all Section 1.1 business rules.
+
+    ``target_keyword``, when supplied, must have at least one of its
+    significant words present within the first ``TITLE_FIRST_NICHE_CHARS``
+    characters (the guide's "niche description zone"). Omitted when the
+    caller has no product-specific keyword to check against.
 
     Returns ``(is_valid, violations)`` where *violations* is a list of
     human-readable error messages (empty when valid).
@@ -79,6 +87,18 @@ def validate_title(title: str) -> tuple[bool, list[str]]:
         seen.add(word)
     if duplicates:
         violations.append(f"Repeated words: {duplicates}")
+
+    # 6. Niche keyword must appear in the first TITLE_FIRST_NICHE_CHARS chars
+    if target_keyword:
+        niche_zone = title_lower[:TITLE_FIRST_NICHE_CHARS]
+        keyword_words = [
+            w for w in target_keyword.lower().split() if w not in _STOP_WORDS
+        ]
+        if keyword_words and not any(w in niche_zone for w in keyword_words):
+            violations.append(
+                f"Target keyword '{target_keyword}' not found in first "
+                f"{TITLE_FIRST_NICHE_CHARS} characters"
+            )
 
     return (len(violations) == 0, violations)
 

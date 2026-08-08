@@ -12,10 +12,7 @@
 
 <ul class="nav nav-tabs" id="settingsTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-production-partner" type="button" role="tab">Production Partner</button>
-  </li>
-  <li class="nav-item" role="presentation">
-    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-description-templates" type="button" role="tab">Description Templates</button>
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-description-templates" type="button" role="tab">Description Templates</button>
   </li>
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-default-attributes" type="button" role="tab">Default Attributes</button>
@@ -32,16 +29,10 @@
   <li class="nav-item" role="presentation">
     <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-operations" type="button" role="tab">Operations</button>
   </li>
-  <li class="nav-item" role="presentation">
-    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-shop-sections" type="button" role="tab">Shop Sections</button>
-  </li>
 </ul>
 
 <div class="tab-content bg-white border border-top-0 rounded-bottom p-4 mb-5">
-  <div class="tab-pane fade show active" id="tab-production-partner" role="tabpanel">
-    {% include "settings/_partial_production_partner.html" %}
-  </div>
-  <div class="tab-pane fade" id="tab-description-templates" role="tabpanel">
+  <div class="tab-pane fade show active" id="tab-description-templates" role="tabpanel">
     {% include "settings/_partial_description_templates.html" %}
   </div>
   <div class="tab-pane fade" id="tab-default-attributes" role="tabpanel">
@@ -58,9 +49,6 @@
   </div>
   <div class="tab-pane fade" id="tab-operations" role="tabpanel">
     {% include "settings/_partial_operations.html" %}
-  </div>
-  <div class="tab-pane fade" id="tab-shop-sections" role="tabpanel">
-    {% include "settings/_partial_shop_sections.html" %}
   </div>
 </div>
 {% endblock %}

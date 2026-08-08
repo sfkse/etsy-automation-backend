@@ -7,7 +7,7 @@ _settings = Settings()
 _log = structlog.get_logger(__name__)
 
 # claude-3-haiku is the cheapest model — only used for research analysis tasks
-_RESEARCH_MODEL = "claude-3-haiku-20240307"
+_RESEARCH_MODEL = "claude-haiku-4-5"
 _MAX_TOKENS = 1024
 
 
