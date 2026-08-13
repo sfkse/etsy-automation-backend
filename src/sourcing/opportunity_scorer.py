@@ -25,6 +25,7 @@ from src.db.models import (
     CompetitorListing,
     KeywordCandidate,
     KeywordScore,
+    KeywordTier,
     SourcingAnalysis,
     SourcingStatus,
 )
@@ -67,6 +68,13 @@ class OpportunityScorer:
 
         scores: list[KeywordScore] = []
         for candidate in analysis.candidates:
+            # Broad-tier keywords are "competition giants — context only" (Layer A).
+            # They score well on market structure but are the wrong target for a
+            # specific product, so they're excluded from the recommendation ranking.
+            if candidate.tier == KeywordTier.BROAD.value:
+                _log.info("scorer_skip_broad_tier", keyword=candidate.keyword)
+                continue
+
             top20 = self._fetch_top20(candidate.keyword)
             if len(top20) < 5:
                 _log.info(
@@ -93,6 +101,29 @@ class OpportunityScorer:
             scored=len(scores),
         )
         return scores
+
+    # Tier-B activity threshold: a bestseller badge alone (25) or a
+    # popular-now + star-seller combo (25) clears it; weak signals don't.
+    ACTIVITY_SIGNAL_THRESHOLD = 20.0
+
+    @classmethod
+    def _is_active(cls, listing: CompetitorListing) -> bool:
+        """True when a listing shows evidence of recent sales.
+
+        Tier A (EHunt present): recent sales >= 1 — identical to the original
+        behavior. Tier B (no EHunt): the listing's persisted sales_signal_score
+        (computed at ingest from on-page proxies) must clear the threshold;
+        computed on the fly for legacy rows ingested before scoring-at-ingest.
+        """
+        if listing.eh_sales_recent is not None or listing.eh_sales_total is not None:
+            return (listing.eh_sales_recent or 0) >= 1
+
+        signal = listing.sales_signal_score
+        if signal is None:
+            from src.modules.research.scoring import compute_sales_signal_score
+
+            signal = compute_sales_signal_score(listing)
+        return signal >= cls.ACTIVITY_SIGNAL_THRESHOLD
 
     def _fetch_top20(self, keyword: str) -> list[CompetitorListing]:
         return (
@@ -133,17 +164,28 @@ class OpportunityScorer:
         else:
             score_price_alignment = 0.5  # insufficient data
 
-        # Sub-score 3: market activity
-        with_sales = sum(1 for l in top20 if (l.eh_sales_recent or 0) >= 1)
+        # Sub-score 3: market activity.
+        # EHunt data (Tier A) is ground truth; when a listing has no EHunt
+        # numbers we fall back to its sales_signal_score, whose Tier-B branch
+        # scores on-page proxies (badges, views, cart, reviews). Without this
+        # fallback, a missing EHunt install silently zeroed out 25% of the
+        # opportunity score for every keyword.
+        with_sales = sum(1 for l in top20 if self._is_active(l))
         score_activity = with_sales / n
 
-        # Sub-score 4: competition (inverted log of total search results)
-        total_results = (
-            next((l.keyword_total_results for l in top20 if l.keyword_total_results), None)
-            or 1
+        # Sub-score 4: competition (inverted log of total search results).
+        # When NO listing carries the total-results count, competition is unknown
+        # — treat it as neutral (0.5) rather than defaulting to 1 result, which
+        # would score competition = 1.0 (max) and make a data-less keyword look
+        # like a zero-competition goldmine.
+        total_results = next(
+            (l.keyword_total_results for l in top20 if l.keyword_total_results), None
         )
-        log_results = math.log10(max(total_results, 1))
-        score_competition = max(0.0, 1.0 - log_results / 6.0)  # [0,6] → [1.0,0.0]
+        if total_results:
+            log_results = math.log10(max(total_results, 1))
+            score_competition = max(0.0, 1.0 - log_results / 6.0)  # [0,6] → [1.0,0.0]
+        else:
+            score_competition = 0.5  # unknown competition
 
         # Sub-score 5: diversity (anti-single-shop dominance)
         shop_counts = Counter(l.shop_id for l in top20 if l.shop_id)

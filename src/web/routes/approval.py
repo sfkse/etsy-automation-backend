@@ -158,6 +158,37 @@ async def approval_detail(
     )
 
 
+# ── Variants as JSON (Chrome extension inline approval) ──────────────────────
+
+@router.get("/{sku}/variants")
+async def approval_variants_json(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """JSON mirror of the approval detail page, consumed by the Chrome
+    extension's inline approval step so the user can approve without leaving
+    the side panel."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    variants = product.generated_variants or []
+    image_count = (
+        session.query(ProductImage).filter_by(product_id=product.id).count()
+    )
+    return JSONResponse({
+        "sku": sku,
+        "status": product.status,
+        "status_label": STATUS_LABELS.get(product.status, product.status),
+        "target_keyword": product.target_keyword,
+        "selected_id": product.selected_variant_id
+        or (variants[0]["id"] if variants else None),
+        "image_count": image_count,
+        "min_images": MIN_IMAGES_PER_LISTING,
+        "variants": variants,
+    })
+
+
 # ── Etsy payload preview (JSON) ───────────────────────────────────────────────
 
 @router.get("/{sku}/payload-preview")

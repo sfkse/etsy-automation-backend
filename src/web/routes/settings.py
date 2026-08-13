@@ -82,18 +82,16 @@ def _get_or_create_settings(session: Session) -> ShopSettings:
 
 
 def compute_preflight(session: Session) -> dict:
-    """Report shop-settings gaps that would break a build or publish.
+    """Report shop-settings gaps that would break a listing build.
 
-    DB-only (no Etsy API calls). The two user-required entries are the
-    Etsy-account-specific IDs the seed can't fill; the rest are defensive
-    checks that only trip if ``seed_shop_defaults.seed_all`` never ran.
+    DB-only (no Etsy API calls). Only defensive checks that trip if
+    ``seed_shop_defaults.seed_all`` never ran. Publish-time requirements
+    (production partner, shipping profile) are NOT checked — publishing via
+    the Etsy API is deferred to v2; the current flow ends at copy/paste.
     Returns ``{"ready": bool, "missing": [{key, label, tab, why}, ...]}``.
     """
     settings = session.query(ShopSettings).filter_by(id=1).first()
     missing: list[dict] = []
-
-    def _blank(value) -> bool:
-        return value is None or (isinstance(value, str) and not value.strip())
 
     if settings is None:
         missing.append({
@@ -101,22 +99,6 @@ def compute_preflight(session: Session) -> dict:
             "label": "Shop Settings",
             "tab": "operations",
             "why": "No shop settings row — run seed_shop_defaults.seed_all.",
-        })
-
-    if settings is None or _blank(settings.production_partner_id):
-        missing.append({
-            "key": "production_partner_id",
-            "label": "Production Partner",
-            "tab": "production-partner",
-            "why": "Etsy rejects new listings without a production partner ID.",
-        })
-
-    if settings is None or _blank(settings.default_shipping_profile_id):
-        missing.append({
-            "key": "default_shipping_profile_id",
-            "label": "Shipping Profile",
-            "tab": "operations",
-            "why": "Listings can't publish without a shipping profile.",
         })
 
     if session.query(PricingStrategy).first() is None:

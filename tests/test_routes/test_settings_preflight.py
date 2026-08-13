@@ -1,5 +1,9 @@
 """Tests for compute_preflight (WS4 — settings preflight for the build gate).
 
+Publish-time requirements (production partner, shipping profile) are no longer
+checked — publishing via the Etsy API is deferred to v2, so preflight only
+verifies the seeded rows a build actually needs.
+
 Uses a MagicMock session that dispatches by model, mirroring the pattern in
 test_payload_builder / test_approval_payload_preview, so no real DB is needed.
 """
@@ -34,32 +38,23 @@ def _make_session(*, settings, pricing=_EXISTS, preset=_EXISTS) -> MagicMock:
     return session
 
 
-def test_ready_when_partner_and_shipping_set():
-    session = _make_session(
-        settings=ShopSettings(id=1, production_partner_id="pp_42", default_shipping_profile_id="ship_1")
-    )
+def test_ready_when_seeded_rows_exist():
+    session = _make_session(settings=ShopSettings(id=1))
     result = compute_preflight(session)
     assert result["ready"] is True
     assert result["missing"] == []
 
 
-def test_missing_shipping_profile_only():
+def test_publish_only_fields_are_not_required():
+    """Production partner / shipping profile are publish-time (v2) concerns."""
     session = _make_session(
-        settings=ShopSettings(id=1, production_partner_id="pp_42", default_shipping_profile_id=None)
+        settings=ShopSettings(
+            id=1, production_partner_id=None, default_shipping_profile_id=None
+        )
     )
     result = compute_preflight(session)
-    keys = {m["key"] for m in result["missing"]}
-    assert result["ready"] is False
-    assert "default_shipping_profile_id" in keys
-    assert "production_partner_id" not in keys
-
-
-def test_blank_strings_count_as_missing():
-    session = _make_session(
-        settings=ShopSettings(id=1, production_partner_id="  ", default_shipping_profile_id="")
-    )
-    keys = {m["key"] for m in compute_preflight(session)["missing"]}
-    assert {"production_partner_id", "default_shipping_profile_id"} <= keys
+    assert result["ready"] is True
+    assert result["missing"] == []
 
 
 def test_defensive_seed_checks_trip_when_rows_absent():
@@ -68,8 +63,6 @@ def test_defensive_seed_checks_trip_when_rows_absent():
     keys = {m["key"] for m in result["missing"]}
     assert {
         "shop_settings",
-        "production_partner_id",
-        "default_shipping_profile_id",
         "pricing_strategy",
         "variation_presets",
     } <= keys

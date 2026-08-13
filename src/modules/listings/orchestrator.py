@@ -94,6 +94,13 @@ class ListingBuildRequest(BaseModel):
     # generation in that keyword's empirical top-20 market data.
     selected_keyword_score_id: Optional[int] = None
 
+    # True when the extension kicked off a Phase-2 competitor deep-dive for the
+    # selected keyword right before this build. The content pipeline then waits
+    # (bounded) for the deep-dive ingest to refresh KeywordResearch, so the
+    # generated content is grounded in the enriched data without a blocking
+    # user checkpoint.
+    deepdive_pending: bool = False
+
 
 class ListingBuilder:
     """Assemble a listing from a slim per-product request."""
@@ -296,11 +303,19 @@ class ListingBuilder:
 # ── Background content pipeline ───────────────────────────────────────────────
 
 
-async def run_listing_content_pipeline(product_sku: str) -> None:
+async def run_listing_content_pipeline(
+    product_sku: str,
+    wait_for_deepdive: bool = False,
+) -> None:
     """
     Background task: runs the existing content orchestrator, wraps each
     variant's description in the operational scaffold, then kicks off the
     image pipeline so approval-page reviewers see both text and images.
+
+    When ``wait_for_deepdive`` is true (extension auto-started a Phase-2
+    competitor deep-dive just before the build), content generation first
+    waits — bounded — for the deep-dive ingest to refresh KeywordResearch,
+    then proceeds with whatever grounding is available.
 
     Image generation is skipped (with a warning) when no ``is_real=True``
     ``ProductImage`` rows exist — this keeps the JSON-only ``POST /listings/build``
@@ -326,6 +341,11 @@ async def run_listing_content_pipeline(product_sku: str) -> None:
         if not product:
             _log.error("listing_pipeline_product_missing", sku=product_sku)
             return
+
+        if wait_for_deepdive and product.selected_keyword_score_id:
+            await _await_deepdive_grounding(
+                session, product.selected_keyword_score_id
+            )
 
         orchestrator = _build_orchestrator(session)
 
@@ -408,6 +428,58 @@ async def run_listing_content_pipeline(product_sku: str) -> None:
         _log.info("listing_pipeline_complete", sku=product_sku)
     finally:
         session.close()
+
+
+async def _await_deepdive_grounding(
+    session: Session,
+    keyword_score_id: int,
+    timeout_s: int = 600,
+    poll_interval_s: int = 15,
+) -> None:
+    """Wait (bounded) for the extension's Phase-2 deep-dive to refresh
+    KeywordResearch for the chosen keyword, then return.
+
+    The deep-dive scrapes ~10 competitor listings (~5-8 min) and its ingest
+    endpoint refreshes ``KeywordResearch.last_analyzed_at``. We poll for a
+    refresh that happened after this wait started; on timeout we proceed with
+    whatever grounding already exists — never blocks the build indefinitely.
+    """
+    import asyncio
+    from datetime import datetime, timedelta
+
+    from src.db.models import KeywordResearch, KeywordScore
+
+    score = session.query(KeywordScore).filter_by(id=keyword_score_id).first()
+    if score is None:
+        return
+    keyword = score.keyword
+
+    # Small margin: the deep-dive may have finished moments before the build.
+    started = datetime.utcnow() - timedelta(minutes=2)
+    deadline = datetime.utcnow() + timedelta(seconds=timeout_s)
+
+    while datetime.utcnow() < deadline:
+        # Reset the transaction snapshot so we see commits made by the
+        # deep-dive ingest request in its own session.
+        session.rollback()
+        research = (
+            session.query(KeywordResearch).filter_by(keyword=keyword).first()
+        )
+        if research and research.last_analyzed_at and research.last_analyzed_at >= started:
+            _log.info(
+                "listing_pipeline_deepdive_ready",
+                keyword=keyword,
+                analyzed_at=str(research.last_analyzed_at),
+            )
+            return
+        await asyncio.sleep(poll_interval_s)
+
+    _log.warning(
+        "listing_pipeline_deepdive_timeout",
+        keyword=keyword,
+        waited_s=timeout_s,
+        hint="proceeding with existing grounding",
+    )
 
 
 def _category_from_preset(preset: Optional[VariationPreset]) -> str:

@@ -4,9 +4,10 @@
 Assembles the "3 mannequin + 3 concept + 3 chart" image set that matches
 the training production standard. Mannequin/concept shots reuse the
 existing ``AbstractImageGenerator`` implementations via
-``ImageWorkflowFactory``; the six AI calls run concurrently under
-``asyncio.gather``. Charts are deterministic Pillow output produced by
-``chart_generators``.
+``ImageWorkflowFactory``; the six AI calls run under ``asyncio.gather`` but are
+bounded by a concurrency semaphore (``IMAGE_GEN_CONCURRENCY``, default 2) so they
+don't burst the image provider's rate limit. Charts are deterministic Pillow
+output produced by ``chart_generators``.
 
 Chart selection:
 - Size chart: always included.
@@ -18,6 +19,7 @@ Chart selection:
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -210,9 +212,19 @@ async def generate_jewelry_set(
             num_outputs=1,
         )
 
-    # ── Kick off all 6 AI calls concurrently ──────────────────────────────
+    # ── Kick off the 6 AI calls, bounded by a concurrency limit ────────────
+    # Firing all 6 at once bursts the image provider's rate limit (e.g. Gemini
+    # returns 429 Too Many Requests). A small semaphore staggers them into waves.
+    # Tune with IMAGE_GEN_CONCURRENCY in .env (1 = fully sequential, safest).
+    max_concurrency = max(1, int(os.getenv("IMAGE_GEN_CONCURRENCY", "2")))
+    sem = asyncio.Semaphore(max_concurrency)
+
+    async def _bounded_generate(prompt: str) -> list[ImageGenerationResult]:
+        async with sem:
+            return await generator.generate(_request(prompt))
+
     ai_tasks = [
-        asyncio.create_task(generator.generate(_request(p)))
+        asyncio.create_task(_bounded_generate(p))
         for p in (*_MANNEQUIN_PROMPTS, *_CONCEPT_PROMPTS)
     ]
     ai_results: list[list[ImageGenerationResult] | BaseException] = await asyncio.gather(

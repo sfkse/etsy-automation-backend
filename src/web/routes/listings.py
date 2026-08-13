@@ -50,7 +50,9 @@ async def build_listing(
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    background_tasks.add_task(run_listing_content_pipeline, product.sku)
+    background_tasks.add_task(
+        run_listing_content_pipeline, product.sku, req.deepdive_pending
+    )
 
     return JSONResponse({
         "product_sku": product.sku,
@@ -136,7 +138,9 @@ async def build_listing_with_image(
         total_bytes=total_bytes,
     )
 
-    background_tasks.add_task(run_listing_content_pipeline, product.sku)
+    background_tasks.add_task(
+        run_listing_content_pipeline, product.sku, req.deepdive_pending
+    )
 
     return JSONResponse({
         "product_sku": product.sku,

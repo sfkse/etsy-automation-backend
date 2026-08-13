@@ -4,6 +4,7 @@ Business-rule validators for titles, tags, and descriptions.
 from __future__ import annotations
 
 import re
+from collections import Counter
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
@@ -63,10 +64,12 @@ def validate_title(
         if keyword.lower() in title_lower:
             violations.append(f"Forbidden keyword '{keyword}' in title")
 
-    # 3. "Pendant" alone — must always appear as "Pendant Necklace"
-    if re.search(r"\bPendant\b(?!\s+Necklace)", title):
+    # 3. "Pendant" must appear as "Pendant Necklace" at least once. Descriptive
+    #    uses ("Cross Pendant", "Ankh Pendant") are fine as long as the canonical
+    #    "Pendant Necklace" appears somewhere in the title.
+    if "pendant" in title_lower and "pendant necklace" not in title_lower:
         violations.append(
-            f"'Pendant' alone is not allowed; use '{PENDANT_MUST_BE}'"
+            f"'Pendant' used without '{PENDANT_MUST_BE}'; include '{PENDANT_MUST_BE}' at least once"
         )
 
     # 4. "Solid Gold" and "Gold Plated" cannot coexist
@@ -77,16 +80,16 @@ def validate_title(
             f"'{SOLID_GOLD_PLATED_CONFLICT[1]}' cannot coexist in the same title"
         )
 
-    # 5. Repeated words (stop words excluded)
-    words = [w.lower() for w in title.split() if w.lower() not in _STOP_WORDS]
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for word in words:
-        if word in seen:
-            duplicates.add(word)
-        seen.add(word)
-    if duplicates:
-        violations.append(f"Repeated words: {duplicates}")
+    # 5. Excessive word repetition (keyword stuffing). Etsy titles legitimately
+    #    repeat the product noun ("Necklace") across comma-separated phrases, so a
+    #    word is only flagged at 3+ occurrences. Punctuation is stripped first so
+    #    "Necklace," and "Necklace" count as the same word (the old check compared
+    #    raw whitespace-split tokens, so it missed/false-flagged on punctuation).
+    tokens = (re.sub(r"[^\w]", "", w).lower() for w in title.split())
+    counts = Counter(w for w in tokens if w and w not in _STOP_WORDS)
+    overused = sorted(w for w, n in counts.items() if n >= 3)
+    if overused:
+        violations.append(f"Words repeated 3+ times: {overused}")
 
     # 6. Niche keyword must appear in the first TITLE_FIRST_NICHE_CHARS chars
     if target_keyword:

@@ -1,34 +1,28 @@
 """
-Phase 4 — Mini-Phase-1 Runner (Layer B)
+Phase 4 — Etsy search-HTML parsing helpers
 
-Programmatically scrapes Etsy's public search HTML to get the top-20 listings
-for a keyword. Uses a 7-day cache against the existing competitor_listings table
-to avoid redundant scraping.
+Parses the ``__NEXT_DATA__`` JSON embedded in Etsy search pages into listing-card
+dicts. These pure helpers are shared by ``/research/quick-scrape`` (Title Helper).
 
-Unlike the Chrome extension (which uses a logged-in browser), this scraper hits
-Etsy's public search endpoint. It parses the __NEXT_DATA__ JSON embedded in every
-Etsy search page, which contains all the listing cards without requiring JS execution.
+NOTE: server-side scraping of Etsy from a datacenter IP is reliably bot-blocked,
+so the sourcing pipeline (Layer B) no longer scrapes here — it scores competitor
+listings collected in a real browser by the Chrome extension and ingested via
+``/sourcing/{id}/ingest-and-score``. Only the parsing helpers below remain, used
+by the lightweight quick-scrape path.
 """
+
 from __future__ import annotations
 
 import json
 import re
-import time
-from datetime import datetime, timedelta
 from typing import Any
 
-import httpx
 import structlog
-from sqlalchemy.orm import Session
-
-from src.db.models import CompetitorListing, SourcingAnalysis
 
 _log = structlog.get_logger(__name__)
 
 _ETSY_SEARCH_URL = "https://www.etsy.com/search"
 _LISTINGS_PER_KEYWORD = 20
-_CACHE_DAYS = 7
-_REQUEST_DELAY_S = 2.5  # polite delay between requests
 
 _HEADERS = {
     "User-Agent": (
@@ -51,118 +45,9 @@ _HEADERS = {
 }
 
 
-class MiniPhase1Runner:
-    """
-    Programmatic Phase 1 scraper with reduced depth (top 20 vs. 60).
-
-    Cache-first: if we scraped this keyword in the last 7 days, reuse existing
-    competitor_listings rows. Only hits Etsy when data is stale or absent.
-    """
-
-    def __init__(self, session: Session):
-        self.session = session
-
-    def run(
-        self,
-        analysis: SourcingAnalysis,
-        keywords: list[str],
-    ) -> dict[str, list[CompetitorListing]]:
-        """
-        Ensure top-20 listings exist for each keyword.
-        Returns dict: keyword -> list[CompetitorListing].
-        """
-        results: dict[str, list[CompetitorListing]] = {}
-
-        for i, keyword in enumerate(keywords):
-            cached = self._lookup_cache(keyword)
-            if cached:
-                _log.info("mini_phase1_cache_hit", keyword=keyword, count=len(cached))
-                results[keyword] = cached
-                continue
-
-            _log.info("mini_phase1_scraping", keyword=keyword)
-            if i > 0:
-                time.sleep(_REQUEST_DELAY_S)
-
-            try:
-                listings = self._scrape_keyword(keyword, analysis)
-                results[keyword] = listings
-            except Exception as e:
-                _log.warning("mini_phase1_scrape_failed", keyword=keyword, error=str(e))
-                results[keyword] = []
-
-        return results
-
-    def _lookup_cache(self, keyword: str) -> list[CompetitorListing]:
-        """Return cached listings if scraped within CACHE_DAYS, else empty list."""
-        cutoff = datetime.utcnow() - timedelta(days=_CACHE_DAYS)
-        rows = (
-            self.session.query(CompetitorListing)
-            .filter(
-                CompetitorListing.keyword_searched == keyword,
-                CompetitorListing.imported_at >= cutoff,
-            )
-            .order_by(CompetitorListing.rank_in_search.asc().nullslast())
-            .limit(_LISTINGS_PER_KEYWORD)
-            .all()
-        )
-        return rows if len(rows) >= 5 else []
-
-    def _scrape_keyword(
-        self,
-        keyword: str,
-        analysis: SourcingAnalysis,
-    ) -> list[CompetitorListing]:
-        """Scrape Etsy search page and persist top-20 listings."""
-        params = {
-            "q": keyword,
-            "explicit": "1",
-            "ref": "pagination",
-        }
-
-        with httpx.Client(
-            headers=_HEADERS,
-            follow_redirects=True,
-            timeout=30,
-        ) as client:
-            resp = client.get(_ETSY_SEARCH_URL, params=params)
-            resp.raise_for_status()
-
-        cards = parse_next_data(resp.text, keyword=keyword)
-        if not cards:
-            _log.warning("mini_phase1_no_cards", keyword=keyword)
-            return []
-
-        listings = []
-        for rank, card in enumerate(cards[:_LISTINGS_PER_KEYWORD], start=1):
-            data = card_to_listing_dict(card, keyword, rank)
-            if not data:
-                continue
-            existing = (
-                self.session.query(CompetitorListing)
-                .filter_by(listing_id=data["listing_id"])
-                .first()
-            )
-            if existing:
-                listings.append(existing)
-                continue
-
-            listing = CompetitorListing(
-                **data,
-                scraped_for_sourcing=True,
-                sourcing_analysis_id=analysis.id,
-                imported_at=datetime.utcnow(),
-            )
-            self.session.add(listing)
-            listings.append(listing)
-
-        self.session.commit()
-        _log.info("mini_phase1_scraped", keyword=keyword, count=len(listings))
-        return listings
-
 # ── Module-level pure helpers ─────────────────────────────────────────────────
-# Shared by MiniPhase1Runner and web/routes/research.py's /research/quick-scrape
-# endpoint (PR 5). Do not depend on ORM or session.
+# Shared by web/routes/research.py's /research/quick-scrape endpoint (PR 5).
+# Do not depend on ORM or session.
 
 
 def parse_next_data(html: str, *, keyword: str | None = None) -> list[dict]:
@@ -240,11 +125,13 @@ def _fallback_parse_html(html: str) -> list[dict]:
         if listing_id in seen:
             continue
         seen.add(listing_id)
-        cards.append({
-            "listing_id": listing_id,
-            "url": f"https://www.etsy.com/listing/{listing_id}/{slug}",
-            "title": slug.replace("-", " "),
-        })
+        cards.append(
+            {
+                "listing_id": listing_id,
+                "url": f"https://www.etsy.com/listing/{listing_id}/{slug}",
+                "title": slug.replace("-", " "),
+            }
+        )
     return cards[:_LISTINGS_PER_KEYWORD]
 
 
@@ -256,10 +143,7 @@ def card_to_listing_dict(card: dict, keyword: str, rank: int) -> dict | None:
     ``sourcing_analysis_id``) themselves.
     """
     listing_id = str(
-        card.get("listing_id")
-        or card.get("listingId")
-        or card.get("id")
-        or ""
+        card.get("listing_id") or card.get("listingId") or card.get("id") or ""
     ).strip()
     if not listing_id:
         return None
@@ -319,7 +203,6 @@ def card_to_listing_dict(card: dict, keyword: str, rank: int) -> dict | None:
 
 
 __all__ = [
-    "MiniPhase1Runner",
     "parse_next_data",
     "card_to_listing_dict",
 ]

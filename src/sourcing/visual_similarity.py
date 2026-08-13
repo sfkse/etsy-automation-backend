@@ -77,6 +77,50 @@ class VisualSimilaritySearch:
         )
         return scored[:top_k]
 
+    def embed_product(self, image_path: str) -> np.ndarray:
+        """Return the (cached) CLIP embedding for the product image."""
+        return self._get_or_compute_rexven_embedding(image_path)
+
+    def mean_similarity_by_keyword(
+        self, product_emb: np.ndarray, keywords: list[str]
+    ) -> dict[str, float | None]:
+        """Self-relative visual relevance per keyword.
+
+        For each keyword, returns the mean CLIP cosine similarity between the
+        product image and the keyword's *own* scraped listings' images — i.e.
+        "how much do this keyword's results look like the product?". A niche
+        keyword whose listings are all the product type scores high; a broad
+        catch-all whose listings are a grab-bag scores low. ``None`` when a
+        keyword has no usable embedded listings.
+        """
+        if not keywords:
+            return {}
+
+        rows = (
+            self.session.query(CompetitorListing)
+            .filter(
+                CompetitorListing.keyword_searched.in_(keywords),
+                CompetitorListing.image_embedding.isnot(None),
+            )
+            .all()
+        )
+
+        by_kw: dict[str, list] = defaultdict(list)
+        for l in rows:
+            if l.image_embedding and len(l.image_embedding) > 0:
+                by_kw[l.keyword_searched].append(l.image_embedding)
+
+        result: dict[str, float | None] = {}
+        for kw in keywords:
+            embs = by_kw.get(kw)
+            if not embs:
+                result[kw] = None
+                continue
+            matrix = np.array(embs, dtype=np.float32)
+            sims = matrix @ product_emb  # both L2-normalized → cosine
+            result[kw] = float(np.mean(sims))
+        return result
+
     def extract_keyword_distribution(
         self, similar_listings: list[tuple[CompetitorListing, float]]
     ) -> list[tuple[str, int, float]]:
