@@ -13,6 +13,7 @@ POST  /approval/{sku}/validate-field   — validate a single field (JSON)
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, Form, Request
@@ -130,6 +131,19 @@ async def approval_detail(
         .order_by(ProductImage.rank)
         .all()
     )
+    # Attach a cache-busted URL per image so a regenerated (overwritten-in-place)
+    # photo shows the latest version instead of the browser's cached copy of the
+    # same URL. Mirrors the ?v=<mtime> pattern used by the per-slot images page.
+    for img in images:
+        if not img.file_path:
+            img.cache_url = None
+            continue
+        url = "/images/" + img.file_path.split("data/images/")[-1]
+        try:
+            url += f"?v={int(Path(img.file_path).stat().st_mtime)}"
+        except OSError:
+            pass
+        img.cache_url = url
 
     variants = product.generated_variants or []
     selected_id = product.selected_variant_id or (variants[0]["id"] if variants else "A")

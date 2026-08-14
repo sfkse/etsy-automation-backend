@@ -199,7 +199,7 @@
             <div class="rounded overflow-hidden border" style="width:64px;height:64px;flex-shrink:0;">
               {% if img.file_path %}
               {% set fname = img.file_path.split('/')[-1] %}
-              {% set img_url = '/images/' + img.file_path.split('data/images/')[-1] %}
+              {% set img_url = img.cache_url or ('/images/' + img.file_path.split('data/images/')[-1]) %}
               <a href="{{ img_url }}" target="_blank" title="{{ fname }}">
                 <img src="{{ img_url }}" alt="{{ img.alt_text or fname }}" loading="lazy"
                      class="w-100 h-100" style="object-fit:cover;">

@@ -89,11 +89,12 @@ async def test_generates_3_mannequin_3_concept_and_3_charts_when_birthstone(tmp_
     ):
         result = await generate_jewelry_set(
             product=product,
-            workflow="flux",
+            workflow="gemini",
             session=session,
             settings=MagicMock(),
             reference_image=Image.new("RGBA", (256, 256), (255, 255, 255, 255)),
             output_dir=tmp_path,
+            include_charts=True,
         )
 
     assert len(result.mannequin_shots) == 3
@@ -121,11 +122,12 @@ async def test_skips_birthstone_chart_when_not_warranted(tmp_path):
     ):
         result = await generate_jewelry_set(
             product=product,
-            workflow="flux",
+            workflow="gemini",
             session=session,
             settings=MagicMock(),
             reference_image=Image.new("RGBA", (256, 256), (255, 255, 255, 255)),
             output_dir=tmp_path,
+            include_charts=True,
         )
 
     assert result.birthstone_chart is None

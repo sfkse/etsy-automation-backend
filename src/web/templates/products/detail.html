@@ -316,7 +316,7 @@
           {% for img in images %}
           <div class="thumbnail-card">
             {% set filename = img.file_path.split('/')[-1] if img.file_path else '' %}
-            {% set img_url = '/images/' ~ img.file_path.split('data/images/')[-1] if img.file_path else '' %}
+            {% set img_url = (img.cache_url or ('/images/' ~ img.file_path.split('data/images/')[-1])) if img.file_path else '' %}
             <div class="bg-light d-flex align-items-center justify-content-center"
                  style="aspect-ratio:1; font-size:.7rem; color:#999; overflow:hidden;">
               {% if img.file_path %}

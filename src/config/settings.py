@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
-    FAL_API_KEY: str = ""
 
     # Etsy OAuth
     ETSY_API_KEY: str = ""
@@ -35,7 +34,7 @@ class Settings(BaseSettings):
 
     # App
     LOG_LEVEL: str = "INFO"
-    DEFAULT_IMAGE_WORKFLOW: Literal["gemini", "openai", "flux"] = "gemini"
+    DEFAULT_IMAGE_WORKFLOW: Literal["gemini", "openai"] = "gemini"
 
     # Phase 3 — Research
     REQUIRE_RESEARCH_FOR_GENERATION: bool = False

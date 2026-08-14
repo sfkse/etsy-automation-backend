@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.modules.images.base import AbstractImageGenerator
-from src.modules.images.flux_generator import FluxImageGenerator
 from src.modules.images.gemini_generator import GeminiImageGenerator
 from src.modules.images.openai_generator import OpenAIImageGenerator
 
@@ -17,7 +16,6 @@ if TYPE_CHECKING:
 _WORKFLOW_CLASSES: dict[str, type[AbstractImageGenerator]] = {
     "gemini": GeminiImageGenerator,
     "openai": OpenAIImageGenerator,
-    "flux": FluxImageGenerator,
 }
 
 
@@ -33,7 +31,6 @@ class ImageWorkflowFactory:
         api_key_map = {
             "gemini": settings.GEMINI_API_KEY,
             "openai": settings.OPENAI_API_KEY,
-            "flux": settings.FAL_API_KEY,
         }
         return _WORKFLOW_CLASSES[workflow_name](api_key_map[workflow_name])
 

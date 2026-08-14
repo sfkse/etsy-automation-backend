@@ -41,11 +41,15 @@ logger = get_logger(__name__)
 # ── Lifestyle prompt templates ────────────────────────────────────────────────
 
 LIFESTYLE_PROMPTS = [
-    "Woman wearing the necklace, soft natural lighting, neutral background",
+    "Woman wearing the necklace, soft natural lighting, neutral background, "
+    "no face visible, cropped at neck or shoulders, product is small and delicate "
+    "— do NOT exaggerate its size, realistic dainty jewelry proportions",
     "Necklace on marble surface flat lay, minimalist styling",
     "Hand opening gift box containing necklace, lifestyle",
     "Macro detail shot of necklace pendant",
-    "Young woman in cafe wearing necklace, candid lifestyle",
+    "Young woman in cafe wearing necklace, candid lifestyle, "
+    "no face visible, cropped at neck or shoulders, product is small and delicate "
+    "— do NOT exaggerate its size, realistic dainty jewelry proportions",
 ]
 
 STYLE_HINT = "professional jewelry photography, soft natural lighting, high quality"

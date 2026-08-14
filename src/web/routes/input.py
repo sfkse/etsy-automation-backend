@@ -62,7 +62,7 @@ _settings = Settings()
 
 # ── Dropdown option lists ──────────────────────────────────────────────────────
 
-WORKFLOW_OPTIONS = ["gemini", "openai", "flux"]
+WORKFLOW_OPTIONS = ["gemini", "openai"]
 
 STATUS_LABELS: dict[str, str] = {
     ProductStatus.MANUAL_INPUT.value:       "Manual Input",
@@ -143,6 +143,18 @@ async def product_detail(
         .order_by(ProductImage.rank)
         .all()
     )
+    # Cache-bust each URL by file mtime so a regenerated (overwritten-in-place)
+    # photo shows the latest version instead of the browser's cached copy.
+    for img in images:
+        if not img.file_path:
+            img.cache_url = None
+            continue
+        url = "/images/" + img.file_path.split("data/images/")[-1]
+        try:
+            url += f"?v={int(_DeletePath(img.file_path).stat().st_mtime)}"
+        except OSError:
+            pass
+        img.cache_url = url
 
     return _tmpl(
         "products/detail.html", request,
@@ -295,7 +307,7 @@ async def comparison_page(
 
     comp_dir = _Path(_settings.IMAGES_DIR) / sku / "comparison"
     workflow_results = []
-    for wf in ["gemini", "openai", "flux"]:
+    for wf in ["gemini", "openai"]:
         img_path = comp_dir / f"{wf}.png"
         workflow_results.append({
             "workflow": wf,
@@ -417,7 +429,7 @@ async def images_page(
         {
             "product": product,
             "slots": slots,
-            "workflows": ["gemini", "openai", "flux"],
+            "workflows": ["gemini", "openai"],
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
         },

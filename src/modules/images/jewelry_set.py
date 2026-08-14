@@ -9,6 +9,14 @@ bounded by a concurrency semaphore (``IMAGE_GEN_CONCURRENCY``, default 2) so the
 don't burst the image provider's rate limit. Charts are deterministic Pillow
 output produced by ``chart_generators``.
 
+Prompt guardrails (Christmas 1 training — ``docs/Christmas1.txt``):
+- Every mannequin shot crops the model's head out of frame ("Mankenin kafası
+  falan gözükmemesi lazım"). A face by hand holding the product near it is fine,
+  but bust/torso shots must not show the face — it distracts from the product.
+- ``_STYLE_HINT`` enforces small/dainty product proportions matching the
+  reference photo, so the model doesn't exaggerate product size (a well-known
+  1-star review pattern for dainty jewelry).
+
 Chart selection:
 - Size chart: always included.
 - Birthstone chart: included when the product has a stone_shape *or* when
@@ -112,11 +120,14 @@ _MANNEQUIN_PROMPTS = [
     f"Close-up of a woman gently holding the necklace pendant between her thumb and "
     f"forefinger near her collarbone, pendant sharp and centered against softly blurred "
     f"skin, shallow depth of field, natural manicured nails, gentle {_P.lighting}, "
-    f"{_P.background}, intimate tactile editorial close-up",
-    f"Three-quarter angle of a woman wearing the necklace, {_P.lighting}, "
+    f"{_P.background}, intimate tactile editorial close-up, "
+    f"face NOT visible in frame, cropped at chin at most",
+    f"Three-quarter bust shot from collarbone to lower jaw only, no face detail, "
+    f"head cropped out of frame, wearing the necklace, {_P.lighting}, "
     f"{_P.background}, editorial lifestyle photography",
     f"Close-up bust shot focused on the necklace against skin, gentle {_P.lighting}, "
-    f"blurred {_P.background}, high detail",
+    f"blurred {_P.background}, high detail, "
+    f"face and eyes NOT visible, only chin and neck at most",
 ]
 
 _CONCEPT_PROMPTS = [
@@ -129,7 +140,9 @@ _CONCEPT_PROMPTS = [
 ]
 
 _STYLE_HINT = (
-    f"professional jewelry photography, {_P.anchor}, high quality, sharp focus"
+    f"professional jewelry photography, {_P.anchor}, high quality, sharp focus, "
+    f"product is small and delicate — do NOT exaggerate its size, realistic dainty "
+    f"jewelry proportions matching the reference photo."
 )
 
 
