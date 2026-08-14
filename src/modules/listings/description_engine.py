@@ -1,9 +1,9 @@
 """
 Description Template Engine (Section D of OPERATIONAL_INTEGRATION.md).
 
-Wraps the LLM-generated intro/personality content inside a fixed 7-section
-scaffold: intro, How to Order, Materials, Packaging, Gift Note, Best Gifts
-For, Have a Question. This preserves originality (LLM writes the unique
+Wraps the LLM-generated intro/personality content inside a fixed 8-section
+scaffold: intro, How to Order, Materials, Finish, Packaging, Gift Note, Best
+Gifts For, Have a Question. This preserves originality (LLM writes the unique
 intro) while giving every listing the same operational skeleton.
 
 Coexistence: Phase 6's DescriptionGenerator still runs first — its output
@@ -42,7 +42,7 @@ class DescriptionEngine:
         category: str,
     ) -> str:
         """
-        Assemble the 7 sections into a full description body.
+        Assemble the 8 sections into a full description body.
 
         Args:
             product:         The Product being built.
@@ -112,6 +112,7 @@ class DescriptionEngine:
             template.section_intro,
             template.section_how_to_order,
             template.section_materials,
+            template.section_finish,
             template.section_packaging,
             template.section_gift_note,
             template.section_best_gifts_for,

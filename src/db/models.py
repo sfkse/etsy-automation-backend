@@ -542,6 +542,7 @@ class DescriptionTemplate(Base):
     section_intro = Column(Text, nullable=True)
     section_how_to_order = Column(Text, nullable=True)
     section_materials = Column(Text, nullable=True)
+    section_finish = Column(Text, nullable=True)
     section_packaging = Column(Text, nullable=True)
     section_gift_note = Column(Text, nullable=True)
     section_best_gifts_for = Column(Text, nullable=True)

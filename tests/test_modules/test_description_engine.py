@@ -25,6 +25,7 @@ def _template() -> DescriptionTemplate:
             "{personalization_instructions}"
         ),
         section_materials="Materials: {materials_line}\n{chain_note}",
+        section_finish="**Finish** Gold / Silver / Rose Gold.",
         section_packaging="Packaging block.",
         section_gift_note="Gift note block.",
         section_best_gifts_for="Gifts for {recipients_list} for {occasions_list}.",
@@ -146,3 +147,17 @@ def test_llm_intro_appears_in_body():
         category="necklace",
     )
     assert "Bright unique intro paragraph." in body
+
+
+def test_finish_section_renders_between_materials_and_packaging():
+    engine = DescriptionEngine(_session(_template()))
+    body = engine.fill(
+        product=_product(),
+        llm_intro="Bright unique intro paragraph.",
+        preset=_brass_preset(),
+        personalization=None,
+        category="necklace",
+    )
+    assert "**Finish** Gold / Silver / Rose Gold." in body
+    # Finish is its own section, sitting between Materials and Packaging.
+    assert body.index("Materials:") < body.index("**Finish**") < body.index("Packaging block.")

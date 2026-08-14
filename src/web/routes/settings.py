@@ -188,8 +188,9 @@ def sync_production_partner(session: Session = Depends(get_session)):
 
 _DESC_TEMPLATE_FIELDS = {
     "section_intro", "section_how_to_order", "section_materials",
-    "section_packaging", "section_gift_note", "section_best_gifts_for",
-    "section_have_a_question", "brass_overrides", "silver_overrides",
+    "section_finish", "section_packaging", "section_gift_note",
+    "section_best_gifts_for", "section_have_a_question",
+    "brass_overrides", "silver_overrides",
     "default_chain_text",
 }
 

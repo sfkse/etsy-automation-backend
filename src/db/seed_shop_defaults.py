@@ -87,6 +87,14 @@ _NECKLACE_TEMPLATE = {
         "{materials_line}\n"
         "{chain_note}"
     ),
+    "section_finish": (
+        "**Finish**\n"
+        "Available in three finishes to suit your style:\n"
+        "• Gold — 14K gold plating over 925 sterling silver (or premium brass)\n"
+        "• Silver — polished 925 sterling silver\n"
+        "• Rose Gold — 14K rose gold plating, warm and romantic\n"
+        "Each finish resists tarnish under normal wear."
+    ),
     "section_packaging": (
         "**Packaging & Shipping**\n"
         "Every order ships in a branded gift box, ready to give. "
@@ -99,8 +107,12 @@ _NECKLACE_TEMPLATE = {
     ),
     "section_best_gifts_for": (
         "**Best Gifts For**\n"
-        "This necklace makes a thoughtful gift for {recipients_list} for "
-        "{occasions_list}."
+        "This piece is a heartfelt gift for {recipients_list} — mothers, wives, "
+        "daughters, sisters, girlfriends, grandmothers, best friends, or anyone "
+        "you care about. Perfect for {occasions_list}, or as a 'thinking of you' "
+        "surprise. Also a meaningful choice for graduations, engagements, weddings, "
+        "anniversaries, Mother's Day, Valentine's Day, Christmas, birthdays, or "
+        "memorial keepsakes."
     ),
     "section_have_a_question": (
         "**Have a Question?**\n"
@@ -149,7 +161,17 @@ def seed_description_templates(session: Session) -> None:
     ]
 
     for spec in seed_specs:
-        if session.query(DescriptionTemplate).filter_by(category=spec["category"]).first():
+        existing = (
+            session.query(DescriptionTemplate)
+            .filter_by(category=spec["category"])
+            .first()
+        )
+        if existing:
+            # Re-apply the two Christmas 3 training sections onto existing rows so
+            # already-seeded DBs pick up the dedicated Finish section and the
+            # enriched Best Gift sweep. Other user-editable sections are untouched.
+            existing.section_finish = spec["section_finish"]
+            existing.section_best_gifts_for = spec["section_best_gifts_for"]
             continue
         session.add(DescriptionTemplate(**spec))
     session.commit()

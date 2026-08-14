@@ -20,9 +20,14 @@ def _empty_session() -> MagicMock:
 
 
 def _populated_session() -> MagicMock:
-    """Session where every existence lookup finds a row (idempotency case)."""
+    """Session where every existence lookup finds a row (idempotency case).
+
+    The row is a MagicMock so that seed_description_templates can re-apply the
+    Finish / Best Gift sections onto existing rows (attribute assignment) without
+    inserting anything new.
+    """
     session = MagicMock()
-    session.query.return_value.filter_by.return_value.first.return_value = object()
+    session.query.return_value.filter_by.return_value.first.return_value = MagicMock()
     return session
 
 
