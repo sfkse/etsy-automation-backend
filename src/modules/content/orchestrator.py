@@ -17,7 +17,12 @@ from datetime import datetime
 
 import structlog
 
+from src.config.settings import Settings
 from src.db.models import Product
+from src.modules.content.batch_generator import (
+    BatchGenerationError,
+    BatchTitleTagGenerator,
+)
 from src.modules.content.description_generator import DescriptionGenerator
 from src.modules.content.internal_linker import InternalLinker
 from src.modules.content.tag_generator import TagGenerator
@@ -48,20 +53,33 @@ class VariantBundleOrchestrator:
         desc_gen: DescriptionGenerator,
         internal_linker: InternalLinker,
         research_builder: ResearchContextBuilder,
+        batch_generator: BatchTitleTagGenerator | None = None,
     ) -> None:
         self.title = title_gen
         self.tag = tag_gen
         self.desc = desc_gen
         self.linker = internal_linker
         self.research = research_builder
+        self.batch_gen = batch_generator  # optional — enables single-call title+tags
 
     async def generate_bundle(self, product: Product) -> VariantBundle:
         """Generate all 3 variants in parallel where possible."""
         angles = self._select_angles_for_niche(product)
 
+        # Batch title+tags for all 3 variants in one LLM call when enabled. The
+        # model sees every angle at once, so it can differentiate them. On any
+        # parse/validation failure we fall back to the per-variant path below.
+        titles_tags: dict[str, dict] | None = None
+        if self.batch_gen and Settings().LLM_BATCH_MODE_ENABLED:
+            try:
+                titles_tags = await self.batch_gen.generate_all(product, angles)
+            except BatchGenerationError:
+                _log.warning("batch_failed_falling_back_to_per_variant", sku=product.sku)
+
         # Parallelise across variants; within each variant we serialise
         variant_tasks = [
-            self._generate_one_variant(product, angle) for angle in angles
+            self._generate_one_variant(product, angle, titles_tags)
+            for angle in angles
         ]
         variants = list(await asyncio.gather(*variant_tasks))
 
@@ -74,15 +92,24 @@ class VariantBundleOrchestrator:
         )
 
     async def _generate_one_variant(
-        self, product: Product, angle: VariantAngle
+        self,
+        product: Product,
+        angle: VariantAngle,
+        titles_tags: dict[str, dict] | None = None,
     ) -> ListingVariant:
         _log.info("variant_generation_start", sku=product.sku, angle=angle.label)
 
-        # 1. Title — anchors the variant
-        title = await self.title.generate_for_angle(product, angle)
+        if titles_tags is not None:
+            # Batch path — title + tags already produced in one shared call.
+            title = titles_tags[angle.variant_letter]["title"]
+            tags = titles_tags[angle.variant_letter]["tags"]
+        else:
+            # Legacy per-variant path (fallback).
+            # 1. Title — anchors the variant
+            title = await self.title.generate_for_angle(product, angle)
 
-        # 2. Tags — complement the title
-        tags = await self.tag.generate_for_angle(product, angle, paired_title=title)
+            # 2. Tags — complement the title
+            tags = await self.tag.generate_for_angle(product, angle, paired_title=title)
 
         # 3. Description — echoes title + tags for internal consistency
         description = await self.desc.generate_for_angle(

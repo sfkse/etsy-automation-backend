@@ -33,6 +33,7 @@ from src.db.dependencies import get_session
 from src.db.models import Product, ProductStatus
 from src.db.session import SessionLocal
 from src.domain.validators import OriginalityChecker
+from src.modules.content.batch_generator import BatchTitleTagGenerator
 from src.modules.content.description_generator import DescriptionGenerator
 from src.modules.content.internal_linker import InternalLinker
 from src.modules.content.keyword_pool import KeywordPoolManager
@@ -71,8 +72,11 @@ def _build_orchestrator(session: Session) -> VariantBundleOrchestrator:
     tag_gen = TagGenerator(llm, pool, research)
     desc_gen = DescriptionGenerator(llm, originality, research)
     linker = InternalLinker(session)
+    batch_gen = BatchTitleTagGenerator(llm, research)
 
-    return VariantBundleOrchestrator(title_gen, tag_gen, desc_gen, linker, research)
+    return VariantBundleOrchestrator(
+        title_gen, tag_gen, desc_gen, linker, research, batch_generator=batch_gen
+    )
 
 
 async def _run_content_pipeline(

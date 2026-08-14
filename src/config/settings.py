@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     # cached_prefix and merges everything into one prompt (debugging fallback).
     LLM_PROMPT_CACHING_ENABLED: bool = True
 
+    # Phase 6 — Batch title+tag generation. When True, all 3 variants' titles and
+    # tags are produced in a single LLM call (9→4 calls/product). Falls back to the
+    # per-variant generators automatically on parse/validation failure.
+    LLM_BATCH_MODE_ENABLED: bool = True
+
     # Phase 10 — Google Sheets sync
     GOOGLE_SHEETS_ENABLED: bool = False
     GOOGLE_SERVICE_ACCOUNT_FILE: str = ""  # path to service-account JSON key file

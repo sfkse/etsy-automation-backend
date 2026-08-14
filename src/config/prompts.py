@@ -5,7 +5,13 @@ All prompts live here. Generators import and `.format()` them with their
 per-call context. Never inline prompt strings inside generator classes.
 """
 
-from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
+from src.config.business_rules import (
+    TAG_COUNT,
+    TAG_MAX_LENGTH,
+    TITLE_FIRST_NICHE_CHARS,
+    TITLE_MAX_LENGTH,
+    TITLE_MIN_LENGTH,
+)
 
 # ── Title Generation ──────────────────────────────────────────────────────────
 
@@ -163,6 +169,53 @@ INSTRUCTIONS:
 3. Prioritise tags that a buyer would actually type into the Etsy search bar.
 4. Return ONLY the 13 tags as a comma-separated list on a single line. No numbering, no extra text.
 """
+
+# ── Batch Variant Generation (title + tags, all 3 variants in one call) ───────
+
+# Single self-contained prompt (no cached_prefix split): the static rules block is
+# below the Sonnet-4.5 1024-token cache floor, so caching would be a no-op today.
+# The LLM sees all 3 angles at once so it can deliberately DIFFERENTIATE the
+# variants (Christmas-2 principle). Numeric limits are interpolated from
+# business_rules so the prompt can never drift from validators.py.
+BATCH_VARIANT_PROMPT = f"""\
+You are an expert Etsy SEO copywriter specialising in jewelry listings.
+
+Generate a title + {TAG_COUNT} tags for EACH of 3 DIFFERENT strategic angles for the
+SAME product. The 3 variants MUST be internally distinct — different keyword mixes,
+different framing. Do not let them converge on the same phrasing.
+
+PRODUCT:
+{{product_summary}}
+
+RESEARCH BRIEF:
+{{research_brief}}
+
+VARIANT ANGLES:
+A - {{angle_a_label}}: {{angle_a_instructions}}
+    Tag distribution: {{angle_a_distribution}}
+B - {{angle_b_label}}: {{angle_b_instructions}}
+    Tag distribution: {{angle_b_distribution}}
+C - {{angle_c_label}}: {{angle_c_instructions}}
+    Tag distribution: {{angle_c_distribution}}
+
+STRICT RULES (apply to every variant):
+1. Title: exactly {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} characters (count carefully).
+2. First {TITLE_FIRST_NICHE_CHARS} characters of the title: niche-descriptive, NOT gift framing.
+3. Exactly {TAG_COUNT} tags per variant, each 2-{TAG_MAX_LENGTH} characters.
+4. No word may appear both in a variant's title and in its own tags (wasted slot).
+5. No two variants may share more than 50% of their tag set — differ meaningfully.
+6. Forbidden: "Stone" alone (use "CZ" / "Pave"); "Pendant" alone (always "Pendant Necklace");
+   "Solid Gold" and "Gold Plated" together in the same title.
+7. Separate title phrase groups with ", " (comma + space). Never use "|".
+
+RETURN STRICT JSON ONLY — no markdown fences, no preamble, no trailing commentary:
+{{{{
+  "variant_a": {{{{ "title": "...", "tags": ["tag1", "tag2", ..., "tag{TAG_COUNT}"] }}}},
+  "variant_b": {{{{ "title": "...", "tags": ["tag1", "tag2", ..., "tag{TAG_COUNT}"] }}}},
+  "variant_c": {{{{ "title": "...", "tags": ["tag1", "tag2", ..., "tag{TAG_COUNT}"] }}}}
+}}}}
+"""
+
 
 # ── Description Generation ────────────────────────────────────────────────────
 
