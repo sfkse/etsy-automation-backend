@@ -170,6 +170,11 @@ class KeywordPool(Base):
     keyword = Column(String(50), unique=True, nullable=False)
     category = Column(String(10))
     carrier_pillar = Column(String(20))
+    # Universal SEO staples (Christmas 2 training) apply across all pillars;
+    # these rows carry carrier_pillar=None and are offered to every listing.
+    is_universal = Column(
+        Boolean, default=False, nullable=False, server_default="false", index=True
+    )
 
 
 class ProductStats(Base):

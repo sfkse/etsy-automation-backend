@@ -333,6 +333,44 @@ def seed_personalization_templates(session: Session) -> None:
     session.commit()
 
 
+# ── Universal keyword staples (Christmas 2 SEO/tag training) ──────────────────
+
+
+def seed_universal_keywords(session: Session) -> None:
+    """Seed the 9 universal jewelry SEO keywords the tag training says belong in
+    every title/tag pass. They carry carrier_pillar=None and is_universal=True so
+    the tag generator offers them across all pillars. Idempotent."""
+    from src.db.models import KeywordPool
+
+    universals = [
+        ("Custom", "big"),
+        ("Personalized", "big"),
+        ("Gold", "big"),
+        ("14K Gold", "medium"),
+        ("14K Gold Plated", "niche"),
+        ("925 Silver", "medium"),
+        ("Sterling Silver", "big"),
+        ("Dainty", "big"),
+        ("Minimalist", "big"),
+    ]
+
+    inserted = 0
+    for kw, cat in universals:
+        if session.query(KeywordPool).filter_by(keyword=kw).first():
+            continue
+        session.add(KeywordPool(
+            keyword=kw,
+            category=cat,
+            carrier_pillar=None,
+            is_universal=True,
+        ))
+        inserted += 1
+    session.commit()
+
+    if inserted:
+        _log.info("universal_keywords_seeded", count=inserted)
+
+
 # ── Top-level entry ───────────────────────────────────────────────────────────
 
 
@@ -344,6 +382,7 @@ def seed_all(session: Session) -> None:
     seed_default_attributes(session)
     seed_variation_presets(session)
     seed_personalization_templates(session)
+    seed_universal_keywords(session)
     _log.info("operational_integration_seed_complete")
 
 

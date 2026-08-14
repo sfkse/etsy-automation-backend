@@ -78,6 +78,21 @@ class KeywordPoolManager:
 
         return candidates
 
+    def get_universal_keywords(self) -> list[str]:
+        """Return the universal SEO staples (carrier_pillar-agnostic), ordered
+        big → medium → niche so the highest-traffic staples come first. These are
+        offered to every listing's tag generation regardless of pillar."""
+        rows = (
+            self._session.query(KeywordPool)
+            .filter(KeywordPool.is_universal.is_(True))
+            .order_by(
+                KeywordPool.category.asc(),
+                KeywordPool.keyword.asc(),
+            )
+            .all()
+        )
+        return [r.keyword for r in rows]
+
     def all_keywords(self, pillar: str | None = None) -> list[KeywordPool]:
         """Return all KeywordPool rows, optionally filtered by pillar."""
         q = self._session.query(KeywordPool)

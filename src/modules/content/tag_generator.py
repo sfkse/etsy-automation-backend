@@ -99,6 +99,8 @@ class TagGenerator:
             angle_candidates = [{"tag": t, "volume": None, "bucket": "pool"} for t in angle_candidates_raw]
             distribution_hint = _FALLBACK_DISTRIBUTION
 
+        angle_candidates = self._prepend_universals(angle_candidates)
+
         prompt = TAG_GENERATION_PROMPT.format(
             paired_title=paired_title,
             angle_label=angle.label,
@@ -159,12 +161,33 @@ class TagGenerator:
 
         return result
 
+    def _prepend_universals(self, candidates: list[dict]) -> list[dict]:
+        """Ensure every universal SEO staple appears in the candidate list, marked
+        with the ``universal`` bucket. They are candidates only — the LLM chooses
+        based on product fit. Existing entries duplicating a universal are dropped
+        and re-added (marked) so all 9 render with the [universal] suffix."""
+        universal_kws = self.pool.get_universal_keywords()
+        if not universal_kws:
+            return candidates
+        universal_lower = {kw.lower() for kw in universal_kws}
+        deduped = [c for c in candidates if c.get("tag", "").lower() not in universal_lower]
+        universal_dicts = [
+            {"tag": kw, "volume": None, "bucket": "universal"} for kw in universal_kws
+        ]
+        return universal_dicts + deduped
+
     @staticmethod
     def _format_candidates(candidates: list[dict]) -> str:
         lines = []
         for c in candidates:
             vol_str = f" [vol: {_fmt_vol(c['volume'])}]" if c.get("volume") else ""
-            bucket_str = f" ({c['bucket']})" if c.get("bucket") and c["bucket"] != "pool" else ""
+            bucket = c.get("bucket")
+            if bucket == "universal":
+                bucket_str = " [universal]"
+            elif bucket and bucket != "pool":
+                bucket_str = f" ({bucket})"
+            else:
+                bucket_str = ""
             lines.append(f"- {c['tag']}{vol_str}{bucket_str}")
         return "\n".join(lines) if lines else "(no candidates — use product type keywords)"
 
@@ -200,6 +223,7 @@ class TagGenerator:
             exclude_in_title=paired_title,
         )
         candidate_dicts = [{"tag": t, "volume": None, "bucket": "pool"} for t in pool_candidates[:40]]
+        candidate_dicts = self._prepend_universals(candidate_dicts)
 
         violation_text = "; ".join(violations)
         retry_prompt = TAG_GENERATION_PROMPT.format(

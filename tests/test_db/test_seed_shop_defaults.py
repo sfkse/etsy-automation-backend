@@ -7,7 +7,7 @@ signal for a second run to confirm idempotency.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.db import seed_shop_defaults
 
@@ -58,3 +58,34 @@ def test_seed_personalization_templates_inserts_library_when_empty():
     seed_shop_defaults.seed_personalization_templates(session)
     # See PersonalizationTemplate list in seed_shop_defaults.py (currently 6 rows)
     assert session.add.call_count == 6
+
+
+def test_seed_universal_keywords_inserts_nine_when_empty():
+    session = _empty_session()
+    seed_shop_defaults.seed_universal_keywords(session)
+    assert session.add.call_count == 9
+    # every universal row is pillar-agnostic and flagged
+    for call in session.add.call_args_list:
+        row = call.args[0]
+        assert row.is_universal is True
+        assert row.carrier_pillar is None
+
+
+def test_seed_universal_keywords_is_idempotent():
+    session = _populated_session()
+    seed_shop_defaults.seed_universal_keywords(session)
+    assert session.add.call_count == 0
+
+
+def test_seed_universal_keywords_logs_count_on_first_seed():
+    session = _empty_session()
+    with patch.object(seed_shop_defaults, "_log") as mock_log:
+        seed_shop_defaults.seed_universal_keywords(session)
+    mock_log.info.assert_called_once_with("universal_keywords_seeded", count=9)
+
+
+def test_seed_universal_keywords_no_log_when_nothing_inserted():
+    session = _populated_session()
+    with patch.object(seed_shop_defaults, "_log") as mock_log:
+        seed_shop_defaults.seed_universal_keywords(session)
+    mock_log.info.assert_not_called()
