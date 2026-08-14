@@ -6,17 +6,18 @@ from src.config.settings import Settings
 _settings = Settings()
 _log = structlog.get_logger(__name__)
 
-# claude-3-haiku is the cheapest model — only used for research analysis tasks
-_RESEARCH_MODEL = "claude-haiku-4-5"
+# Haiku is the cheapest model — used for structured research/analysis tasks.
+_RESEARCH_MODEL = _settings.LLM_MODEL_STRUCTURED
 _MAX_TOKENS = 1024
 
 
 class LLMClient:
     """Thin async wrapper around Anthropic.
 
-    The ``model`` parameter defaults to the cheap Haiku model used by Phase 3
-    research analyzers. Pass ``model=settings.CONTENT_LLM_MODEL`` (Claude Sonnet)
-    for Phase 6 content generation where output quality matters more than cost.
+    The ``model`` parameter defaults to the cheap Haiku model
+    (``settings.LLM_MODEL_STRUCTURED``) used by Phase 3 research analyzers. Pass
+    ``model=settings.LLM_MODEL_CREATIVE`` (Claude Sonnet) for Phase 6 content
+    generation where output quality matters more than cost.
     """
 
     def __init__(self, api_key: str | None = None, model: str = _RESEARCH_MODEL):
@@ -69,8 +70,8 @@ class LLMClient:
             messages = [{"role": "user", "content": prompt}]
 
         # NOTE: temperature is accepted by claude-sonnet-4-5 / claude-haiku-4-5.
-        # If CONTENT_LLM_MODEL is ever bumped to a 4.6+/5 model, sampling params
-        # are rejected (400) and this must be dropped.
+        # If LLM_MODEL_CREATIVE/STRUCTURED is ever bumped to a 4.7+/5 model,
+        # sampling params are rejected (400) and this must be dropped.
         message = await self._client.messages.create(
             model=used_model,
             max_tokens=max_tokens,
@@ -96,4 +97,4 @@ def get_llm_client() -> LLMClient:
 
 def get_content_llm_client() -> LLMClient:
     """FastAPI dependency / convenience factory — Phase 6 content (Sonnet)."""
-    return LLMClient(model=_settings.CONTENT_LLM_MODEL)
+    return LLMClient(model=_settings.LLM_MODEL_CREATIVE)

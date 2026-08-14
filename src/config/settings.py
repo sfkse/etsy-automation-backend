@@ -39,8 +39,13 @@ class Settings(BaseSettings):
     # Phase 3 — Research
     REQUIRE_RESEARCH_FOR_GENERATION: bool = False
 
-    # Phase 6 — Content LLM (Sonnet for quality; Haiku used by research analyzers)
-    CONTENT_LLM_MODEL: str = "claude-sonnet-4-5"
+    # Phase 6 — Per-task LLM model routing.
+    #   CREATIVE   = titles, descriptions, tags (quality-sensitive)
+    #   STRUCTURED = cliché extraction, research analyzers (pattern extraction)
+    #   FALLBACK   = retry target if a STRUCTURED (Haiku) call is malformed
+    LLM_MODEL_CREATIVE: str = "claude-sonnet-4-5"
+    LLM_MODEL_STRUCTURED: str = "claude-haiku-4-5"
+    LLM_MODEL_FALLBACK: str = "claude-sonnet-4-5"
 
     # Phase 6 — Anthropic prompt caching. When False, LLMClient ignores
     # cached_prefix and merges everything into one prompt (debugging fallback).

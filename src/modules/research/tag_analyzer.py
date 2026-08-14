@@ -18,9 +18,11 @@ from statistics import median
 
 from sqlalchemy.orm import Session
 
+from src.config.settings import Settings
 from src.db.models import CompetitorListing
 
 logger = logging.getLogger(__name__)
+_settings = Settings()
 
 STOPWORDS = {"the", "a", "an", "and", "or", "with", "for", "in", "to", "of", "on", "by"}
 
@@ -179,7 +181,10 @@ Descriptions:
 """
 
     try:
-        response = await llm_client.complete(prompt)
+        # Cliché extraction is pattern-matching, not creative prose — Haiku is
+        # enough. Pin the structured model explicitly so this stays cheap even
+        # if a caller passes a Sonnet-configured client.
+        response = await llm_client.complete(prompt, model=_settings.LLM_MODEL_STRUCTURED)
         return json.loads(response).get("cliches", [])
     except Exception as exc:
         logger.warning("Cliché extraction failed for %r: %s", keyword, exc)
