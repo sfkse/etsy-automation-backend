@@ -46,6 +46,39 @@ Shape descriptors (use only if the visible product has that shape):
 """
 
 
+NOUN_VARIATION_LADDER = """\
+NOUN VARIATION VOCABULARY (rotate these within a title to avoid repeating the
+same word 5 times):
+
+Necklace family:
+- Necklace
+- Pendant Necklace  (never just "Pendant" — always "Pendant Necklace")
+- Chain Necklace
+- Choker  (short 14-16 inch)
+
+Bracelet family:
+- Bracelet
+- Bangle  (rigid, slip-on)
+- Cuff Bracelet  (open, C-shaped)
+- Wristband  (casual, softer term)
+
+Earring family:
+- Earrings
+- Studs  (small, close to earlobe)
+- Drop Earrings  (dangle)
+- Hoop Earrings
+
+Ring family:
+- Ring
+- Band  (plain/thin ring)
+- Signet Ring  (flat top with engraving)
+
+Rule: use 2-3 different noun variations from the same family within a single
+title if possible. E.g. "Dainty Cross Necklace, Tiny Cross Pendant Necklace,
+Sideways Cross Chain Necklace" uses 3 noun variations of the necklace family.
+"""
+
+
 TITLE_GENERATION_PROMPT = f"""\
 You are an expert Etsy SEO copywriter specialising in jewelry listings.
 
@@ -64,8 +97,12 @@ STRICT RULES (must never be violated):
 5. No repeated non-stop words (stop words: and, for, the, with, a, an, of, in, to, by, at).
 6. Separate phrase groups with ", " (comma + space). Never use "|".
 7. The first 60 characters must contain the core niche keyword.
+8. Use 2-3 different noun variations from the same family (see NOUN
+   VARIATION VOCABULARY below) to expand keyword coverage.
 
 {{adjective_ladder}}
+
+{{noun_ladder}}
 
 KEYWORD POOL (base candidates — use these, do not invent keywords):
 {{keyword_pool}}

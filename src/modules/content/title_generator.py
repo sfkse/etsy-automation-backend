@@ -10,7 +10,11 @@ from __future__ import annotations
 import structlog
 
 from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
-from src.config.prompts import JEWELRY_ADJECTIVE_LADDER, TITLE_GENERATION_PROMPT
+from src.config.prompts import (
+    JEWELRY_ADJECTIVE_LADDER,
+    NOUN_VARIATION_LADDER,
+    TITLE_GENERATION_PROMPT,
+)
 from src.db.models import Product
 from src.domain.validators import validate_title
 from src.modules.llm.angles import VariantAngle
@@ -124,6 +128,7 @@ class TitleGenerator:
             features=_extract_features(product),
             target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
             adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
+            noun_ladder=NOUN_VARIATION_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords — use product type)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,
@@ -156,6 +161,7 @@ class TitleGenerator:
             features=_extract_features(product),
             target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
             adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
+            noun_ladder=NOUN_VARIATION_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,

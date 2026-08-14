@@ -489,6 +489,55 @@ class TestTitleAdditionalRules:
         assert expected.issubset(set(br.FORBIDDEN_TITLE_KEYWORDS))
 
 
+# ─── Noun Variation Ladder (title prompt wiring) ──────────────────────────────
+
+
+class TestNounVariationLadder:
+    """The noun-variation vocabulary must be defined and wired into the title
+    prompt so the LLM varies the head noun across the 3 variants."""
+
+    def test_ladder_lists_all_four_families(self) -> None:
+        from src.config.prompts import NOUN_VARIATION_LADDER
+        for family in ("Necklace family:", "Bracelet family:",
+                       "Earring family:", "Ring family:"):
+            assert family in NOUN_VARIATION_LADDER
+
+    def test_ladder_respects_pendant_necklace_rule(self) -> None:
+        # The vocabulary must never suggest bare "Pendant"; validators.py flags it.
+        from src.config.prompts import NOUN_VARIATION_LADDER
+        assert "Pendant Necklace" in NOUN_VARIATION_LADDER
+
+    def test_prompt_has_noun_ladder_placeholder(self) -> None:
+        from src.config.prompts import TITLE_GENERATION_PROMPT
+        assert "{noun_ladder}" in TITLE_GENERATION_PROMPT
+
+    def test_prompt_has_strict_rule_8(self) -> None:
+        from src.config.prompts import TITLE_GENERATION_PROMPT
+        assert "noun variations from the same family" in TITLE_GENERATION_PROMPT
+
+    def test_prompt_formats_with_noun_ladder(self) -> None:
+        # Proves both TitleGenerator .format() call sites can render cleanly —
+        # a missing noun_ladder kwarg would raise KeyError here.
+        from src.config.prompts import (
+            JEWELRY_ADJECTIVE_LADDER,
+            NOUN_VARIATION_LADDER,
+            TITLE_GENERATION_PROMPT,
+        )
+        rendered = TITLE_GENERATION_PROMPT.format(
+            product_type="Necklace",
+            material="Gold",
+            features="cross",
+            target_keyword="cross necklace",
+            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
+            noun_ladder=NOUN_VARIATION_LADDER,
+            keyword_pool="cross necklace, dainty cross",
+            research_brief="(no research)",
+            angle_label="competitor_common",
+            angle_instructions="Lean into common phrases.",
+        )
+        assert "NOUN VARIATION VOCABULARY" in rendered
+
+
 # ─── Image Business Rules ──────────────────────────────────────────────────────
 
 
