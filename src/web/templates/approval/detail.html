@@ -182,11 +182,16 @@
 
         <!-- Images -->
         <div class="col-md-6">
-          <label class="fw-semibold small text-muted text-uppercase mb-2 d-flex align-items-center gap-2" style="letter-spacing:.05em;">
+          <label class="fw-semibold small text-muted text-uppercase mb-2 d-flex align-items-center gap-2 flex-wrap" style="letter-spacing:.05em;">
             Product Images ({{ images | length }})
             <a href="/products/{{ product.sku }}/images" class="text-decoration-none small text-primary text-lowercase">
               regenerate / compare →
             </a>
+            {% if images %}
+            <a href="/approval/{{ product.sku }}/images.zip" class="text-decoration-none small text-primary text-lowercase">
+              download all ({{ images | length }}) ↓
+            </a>
+            {% endif %}
           </label>
           {% if low_images %}
           <div class="alert alert-warning py-2 px-3 small mb-2">

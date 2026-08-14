@@ -12,6 +12,7 @@ import structlog
 from src.config.business_rules import CLICHE_DESCRIPTION_PHRASES, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS
 from src.config.prompts import (
     DESCRIPTION_DYNAMIC_TEMPLATE,
+    DESCRIPTION_RETRY_PROMPT,
     DESCRIPTION_STATIC_PREFIX,
 )
 from src.db.models import Product
@@ -138,7 +139,31 @@ class DescriptionGenerator:
                     angle=angle.label,
                     similarity=f"{similarity:.2f}",
                 )
-                prompt = self._add_originality_reminder(prompt, similarity)
+                # Two-tier escalation. A mild miss (0.85–0.95) on an early
+                # attempt gets the cheap soft reminder. A catastrophic miss
+                # (>0.95), or the last attempt we can still shape, jumps to the
+                # aggressive DESCRIPTION_RETRY_PROMPT — soft-nudging a
+                # near-duplicate almost never helps.
+                catastrophic = similarity > 0.95
+                if catastrophic:
+                    _log.warning(
+                        "description_catastrophically_similar_escalating",
+                        attempt=attempt,
+                        angle=angle.label,
+                        similarity=f"{similarity:.2f}",
+                    )
+                if catastrophic or attempt >= _MAX_ATTEMPTS - 1:
+                    prompt = self._build_retry_prompt(
+                        product=product,
+                        angle=angle,
+                        paired_title=paired_title,
+                        paired_tags=paired_tags,
+                        rejected_draft=draft,
+                        similarity=similarity,
+                        all_cliches=all_cliches,
+                    )
+                else:
+                    prompt = self._add_originality_reminder(prompt, similarity)
                 continue
 
             _log.info(
@@ -159,6 +184,39 @@ class DescriptionGenerator:
     @staticmethod
     def _parse_description(response: str) -> str:
         return response.strip()
+
+    def _build_retry_prompt(
+        self,
+        product: Product,
+        angle: VariantAngle,
+        paired_title: str,
+        paired_tags: list[str],
+        rejected_draft: str,
+        similarity: float,
+        all_cliches: list[str],
+    ) -> str:
+        """Build the aggressive rewrite prompt for the escalation path.
+
+        Quotes the rejected draft and the specific corpus sentences it echoed so
+        the LLM knows exactly what to avoid. The forbidden-cliché list (normally
+        carried by the dynamic template, which this replaces) is re-appended so
+        the aggressive path doesn't silently re-introduce clichés.
+        """
+        similar = self.originality.find_similar_phrases(rejected_draft, top_k=5)
+        prompt = DESCRIPTION_RETRY_PROMPT.format(
+            similarity=similarity,
+            rejected_draft=rejected_draft,
+            similar_phrases=(
+                "\n".join(f"- {p}" for p in similar) or "- (none identified)"
+            ),
+            product_summary=_product_summary(product),
+            paired_title=paired_title,
+            paired_tags=", ".join(paired_tags),
+            voice=angle.description_voice,
+        )
+        if all_cliches:
+            prompt = self._add_cliche_reminder(prompt, all_cliches)
+        return prompt
 
     @staticmethod
     def _add_length_reminder(prompt: str, actual_count: int) -> str:

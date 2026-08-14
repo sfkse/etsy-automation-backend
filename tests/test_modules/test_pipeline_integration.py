@@ -200,6 +200,9 @@ class TestFullPipelineIntegration:
         mock_pil.open.return_value.__enter__ = MagicMock(return_value=dummy_img)
         mock_pil.open.return_value = dummy_img
         mock_pil.new.return_value = dummy_img
+        # The unpatched ImageOps.contain() resizes the (real) dummy image using
+        # Image.LANCZOS — keep it a real resampling filter, not a MagicMock.
+        mock_pil.LANCZOS = Image.LANCZOS
 
         # Image generator returns one result per prompt
         fake_result = MagicMock()

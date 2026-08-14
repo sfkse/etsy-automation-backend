@@ -31,6 +31,22 @@ _STOP_WORDS: frozenset[str] = frozenset(
     {"and", "for", "the", "with", "a", "an", "of", "in", "to", "by", "at"}
 )
 
+# Minimum characters for a sentence fragment to be worth embedding — drops
+# stray "." splits and trivial fragments from similarity comparison.
+_MIN_SENTENCE_CHARS: int = 12
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+")
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split *text* into trimmed sentences, dropping blanks and short fragments."""
+    if not text:
+        return []
+    return [
+        s.strip()
+        for s in _SENTENCE_SPLIT_RE.split(text)
+        if len(s.strip()) >= _MIN_SENTENCE_CHARS
+    ]
+
 
 # ─── Title ────────────────────────────────────────────────────────────────────
 
@@ -241,3 +257,44 @@ class OriginalityChecker:
             if phrase.lower() in desc_lower:
                 found.append(phrase)
         return found
+
+    def find_similar_phrases(self, text: str, top_k: int = 5) -> list[str]:
+        """Top-K corpus sentences that *text* most closely echoes.
+
+        For each sentence in *text*, find its nearest neighbour among all
+        sentences in the existing final-description corpus, then return the
+        distinct corpus sentences with the highest similarity. Used by the
+        description retry prompt to tell the LLM exactly what phrasing to avoid.
+        Returns an empty list when there is no corpus or no usable sentences.
+        """
+        text_sentences = _split_sentences(text)
+        if not text_sentences:
+            return []
+
+        existing_rows = (
+            self.session.query(Product.final_description)
+            .filter(Product.final_description.isnot(None))
+            .all()
+        )
+        corpus_sentences: list[str] = []
+        for row in existing_rows:
+            corpus_sentences.extend(_split_sentences(row[0]))
+        if not corpus_sentences:
+            return []
+
+        text_embs = self.model.encode(text_sentences)
+        corpus_embs = self.model.encode(corpus_sentences)
+        similarities = cosine_similarity(text_embs, corpus_embs)
+
+        # Best corpus match per draft sentence, keeping the highest score seen
+        # for each distinct corpus sentence.
+        best_by_phrase: dict[str, float] = {}
+        for row_sims in similarities:
+            j = int(row_sims.argmax())
+            phrase = corpus_sentences[j]
+            score = float(row_sims[j])
+            if score > best_by_phrase.get(phrase, -1.0):
+                best_by_phrase[phrase] = score
+
+        ranked = sorted(best_by_phrase.items(), key=lambda kv: kv[1], reverse=True)
+        return [phrase for phrase, _ in ranked[:top_k]]

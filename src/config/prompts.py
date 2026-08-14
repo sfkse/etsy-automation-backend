@@ -257,3 +257,39 @@ INSTRUCTIONS:
 3. Count words precisely before returning.
 4. Return ONLY the description text. No labels, no extra commentary.
 """
+
+
+# Aggressive rewrite prompt used as the "escape hatch" when a draft is
+# catastrophically similar to the existing corpus (or on the last shapeable
+# retry). Unlike the soft reminder appended by _add_originality_reminder, this
+# replaces the whole dynamic body: it quotes the rejected draft and the specific
+# corpus sentences it echoed, and demands a structurally different rewrite. It is
+# still sent with DESCRIPTION_STATIC_PREFIX as cached_prefix, so the strict
+# length / no-cliché rules continue to apply.
+DESCRIPTION_RETRY_PROMPT = """\
+Your previous description was TOO SIMILAR to existing listings
+(similarity: {similarity:.2f} — the acceptable threshold is 0.85 or lower).
+
+REJECTED DRAFT:
+{rejected_draft}
+
+COMMON PATTERNS DETECTED (avoid ALL of these):
+{similar_phrases}
+
+Rewrite the description with:
+1. A completely different opening sentence structure — do NOT start with
+   the same subject as the rejected draft.
+2. At least 3 sensory or specific detail hooks that were absent before
+   (texture, weight, light interaction, specific occasion moment).
+3. Different paragraph ordering — if you led with product features, lead
+   with recipient emotion this time (or vice versa).
+4. Preserve the paired title and tag vocabulary, but express it differently.
+
+PRODUCT + PAIRED CONTEXT (same as before):
+{product_summary}
+Paired title: {paired_title}
+Paired tags: {paired_tags}
+Voice: {voice}
+
+Return ONLY the rewritten description, 150-220 words.
+"""

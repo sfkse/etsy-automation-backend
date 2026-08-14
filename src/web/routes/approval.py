@@ -12,13 +12,15 @@ POST  /approval/{sku}/validate-field   — validate a single field (JSON)
 """
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -201,6 +203,53 @@ async def approval_variants_json(
         "min_images": MIN_IMAGES_PER_LISTING,
         "variants": variants,
     })
+
+
+# ── Bulk image download (ZIP) ─────────────────────────────────────────────────
+
+@router.get("/{sku}/images.zip")
+async def approval_images_zip(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """Stream all of a product's images as a single ZIP so the user can grab
+    every photo in one click (from the Chrome extension's approved step and the
+    web approval detail page) instead of right-click-saving each thumbnail."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    images = (
+        session.query(ProductImage)
+        .filter_by(product_id=product.id)
+        .order_by(ProductImage.rank)
+        .all()
+    )
+
+    buffer = io.BytesIO()
+    written = 0
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, img in enumerate(images, start=1):
+            if not img.file_path:
+                continue
+            path = Path(img.file_path)
+            if not path.is_file():
+                continue
+            # Rank-prefix keeps a stable, human-readable order in the archive.
+            arcname = f"{idx:02d}-{path.name}"
+            zf.write(path, arcname=arcname)
+            written += 1
+
+    if written == 0:
+        return JSONResponse({"error": "no images"}, status_code=404)
+
+    buffer.seek(0)
+    filename = f"etsy-{sku}-images.zip"
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ── Etsy payload preview (JSON) ───────────────────────────────────────────────
