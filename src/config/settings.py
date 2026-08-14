@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # Phase 6 — Content LLM (Sonnet for quality; Haiku used by research analyzers)
     CONTENT_LLM_MODEL: str = "claude-sonnet-4-5"
 
+    # Phase 6 — Anthropic prompt caching. When False, LLMClient ignores
+    # cached_prefix and merges everything into one prompt (debugging fallback).
+    LLM_PROMPT_CACHING_ENABLED: bool = True
+
     # Phase 10 — Google Sheets sync
     GOOGLE_SHEETS_ENABLED: bool = False
     GOOGLE_SERVICE_ACCOUNT_FILE: str = ""  # path to service-account JSON key file

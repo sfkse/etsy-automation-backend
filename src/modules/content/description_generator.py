@@ -10,7 +10,10 @@ from __future__ import annotations
 import structlog
 
 from src.config.business_rules import CLICHE_DESCRIPTION_PHRASES, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS
-from src.config.prompts import DESCRIPTION_GENERATION_PROMPT
+from src.config.prompts import (
+    DESCRIPTION_DYNAMIC_TEMPLATE,
+    DESCRIPTION_STATIC_PREFIX,
+)
 from src.db.models import Product
 from src.domain.validators import OriginalityChecker
 from src.modules.llm.angles import VariantAngle
@@ -86,7 +89,7 @@ class DescriptionGenerator:
             CLICHE_DESCRIPTION_PHRASES + (research_ctx.cliches_to_avoid if research_ctx.has_data else [])
         ))
 
-        prompt = DESCRIPTION_GENERATION_PROMPT.format(
+        prompt = DESCRIPTION_DYNAMIC_TEMPLATE.format(
             product_summary=_product_summary(product),
             voice=angle.description_voice,
             paired_title=paired_title,
@@ -99,7 +102,9 @@ class DescriptionGenerator:
 
         draft = ""
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = await self.llm.complete(prompt, max_tokens=700)
+            response = await self.llm.complete(
+                prompt=prompt, cached_prefix=DESCRIPTION_STATIC_PREFIX, max_tokens=700
+            )
             draft = self._parse_description(response)
 
             length_ok, word_count = _check_word_count(draft)

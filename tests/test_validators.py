@@ -507,35 +507,36 @@ class TestNounVariationLadder:
         from src.config.prompts import NOUN_VARIATION_LADDER
         assert "Pendant Necklace" in NOUN_VARIATION_LADDER
 
-    def test_prompt_has_noun_ladder_placeholder(self) -> None:
-        from src.config.prompts import TITLE_GENERATION_PROMPT
-        assert "{noun_ladder}" in TITLE_GENERATION_PROMPT
+    def test_prompt_has_noun_ladder(self) -> None:
+        # The noun ladder is baked into the cached static prefix (prompt caching
+        # split), no longer a {noun_ladder} placeholder in a single template.
+        from src.config.prompts import TITLE_STATIC_PREFIX
+        assert "NOUN VARIATION VOCABULARY" in TITLE_STATIC_PREFIX
 
     def test_prompt_has_strict_rule_8(self) -> None:
-        from src.config.prompts import TITLE_GENERATION_PROMPT
-        assert "noun variations from the same family" in TITLE_GENERATION_PROMPT
+        from src.config.prompts import TITLE_STATIC_PREFIX
+        assert "noun variations from the same family" in TITLE_STATIC_PREFIX
 
     def test_prompt_formats_with_noun_ladder(self) -> None:
-        # Proves both TitleGenerator .format() call sites can render cleanly —
-        # a missing noun_ladder kwarg would raise KeyError here.
+        # Proves both TitleGenerator .format() call sites render cleanly — a
+        # missing kwarg would raise KeyError here — and that the noun ladder is
+        # carried by the cached static prefix.
         from src.config.prompts import (
-            JEWELRY_ADJECTIVE_LADDER,
-            NOUN_VARIATION_LADDER,
-            TITLE_GENERATION_PROMPT,
+            TITLE_DYNAMIC_TEMPLATE,
+            TITLE_STATIC_PREFIX,
         )
-        rendered = TITLE_GENERATION_PROMPT.format(
+        rendered = TITLE_DYNAMIC_TEMPLATE.format(
             product_type="Necklace",
             material="Gold",
             features="cross",
             target_keyword="cross necklace",
-            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
-            noun_ladder=NOUN_VARIATION_LADDER,
             keyword_pool="cross necklace, dainty cross",
             research_brief="(no research)",
             angle_label="competitor_common",
             angle_instructions="Lean into common phrases.",
         )
-        assert "NOUN VARIATION VOCABULARY" in rendered
+        assert "STRATEGIC ANGLE" in rendered
+        assert "NOUN VARIATION VOCABULARY" in TITLE_STATIC_PREFIX
 
 
 # ─── Image Business Rules ──────────────────────────────────────────────────────

@@ -79,15 +79,12 @@ Sideways Cross Chain Necklace" uses 3 noun variations of the necklace family.
 """
 
 
-TITLE_GENERATION_PROMPT = f"""\
+# Prompt-caching split: the STATIC prefix is byte-identical across every title
+# call (preamble + strict rules + both ladders) and is sent as a cached content
+# block; the DYNAMIC template carries the per-product/per-angle fields. Assemble
+# order is [static prefix] + [dynamic] — see src/utils/llm_client.py.
+TITLE_STATIC_PREFIX = f"""\
 You are an expert Etsy SEO copywriter specialising in jewelry listings.
-
-PRODUCT:
-- Type: {{product_type}}
-- Material: {{material}}
-- Features: {{features}}
-
-TARGET KEYWORD (must appear naturally, ideally within the first 60 characters): {{target_keyword}}
 
 STRICT RULES (must never be violated):
 1. Each title must be {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} characters (count carefully).
@@ -100,9 +97,18 @@ STRICT RULES (must never be violated):
 8. Use 2-3 different noun variations from the same family (see NOUN
    VARIATION VOCABULARY below) to expand keyword coverage.
 
-{{adjective_ladder}}
+{JEWELRY_ADJECTIVE_LADDER}
 
-{{noun_ladder}}
+{NOUN_VARIATION_LADDER}"""
+
+
+TITLE_DYNAMIC_TEMPLATE = f"""\
+PRODUCT:
+- Type: {{product_type}}
+- Material: {{material}}
+- Features: {{features}}
+
+TARGET KEYWORD (must appear naturally, ideally within the first 60 characters): {{target_keyword}}
 
 KEYWORD POOL (base candidates — use these, do not invent keywords):
 {{keyword_pool}}
@@ -122,7 +128,11 @@ INSTRUCTIONS:
 
 # ── Tag Generation ────────────────────────────────────────────────────────────
 
-TAG_GENERATION_PROMPT = """\
+# Prompt-caching split (see TITLE_STATIC_PREFIX). The static prefix here is
+# small (preamble + rules); it is well below the Sonnet-4.5 1024-token cache
+# floor, so on that model it is a harmless no-op — plumbed for uniformity and to
+# future-proof for larger models/prefixes.
+TAG_STATIC_PREFIX = """\
 You are an expert Etsy SEO specialist generating tags for a jewelry listing.
 
 STRICT RULES (must never be violated):
@@ -131,8 +141,10 @@ STRICT RULES (must never be violated):
 3. No duplicate tags (case-insensitive).
 4. Do NOT use the phrase "Mother's Day Gift" — use "gifts for mom" instead.
 5. Do NOT repeat phrases already prominent in the paired title (those slots are wasted).
-6. Tags should be multi-word phrases when possible (2-4 words) — single generic words rank poorly.
+6. Tags should be multi-word phrases when possible (2-4 words) — single generic words rank poorly."""
 
+
+TAG_DYNAMIC_TEMPLATE = """\
 PAIRED TITLE (tags must complement, not duplicate, this title):
 {paired_title}
 
@@ -154,18 +166,26 @@ INSTRUCTIONS:
 
 # ── Description Generation ────────────────────────────────────────────────────
 
-DESCRIPTION_GENERATION_PROMPT = """\
+# Prompt-caching split (see TITLE_STATIC_PREFIX). Rule 2's cliché list is
+# per-product (research-derived), so it lives in the DYNAMIC template as its own
+# FORBIDDEN CLICHÉS block — keeping the static prefix byte-stable. As with tags,
+# this prefix is below the Sonnet-4.5 cache floor and is a harmless no-op there.
+DESCRIPTION_STATIC_PREFIX = """\
 You are an expert Etsy copywriter generating product descriptions for a jewelry listing.
-
-PRODUCT:
-{product_summary}
 
 STRICT RULES (must never be violated):
 1. Length: 150-220 words (count carefully).
-2. Do NOT use any of these cliché phrases: {forbidden_cliches}
-3. Be specific — avoid vague generalities.
-4. No markdown formatting (no **, no bullet points with -, no headers). Plain paragraphs only.
-5. Reuse at least 3-5 phrases from the paired title and 2-3 concepts from the paired tags.
+2. Be specific — avoid vague generalities.
+3. No markdown formatting (no **, no bullet points with -, no headers). Plain paragraphs only.
+4. Reuse at least 3-5 phrases from the paired title and 2-3 concepts from the paired tags.
+5. Do NOT use any of the forbidden cliché phrases listed below."""
+
+
+DESCRIPTION_DYNAMIC_TEMPLATE = """\
+PRODUCT:
+{product_summary}
+
+FORBIDDEN CLICHÉS (must never appear): {forbidden_cliches}
 
 INTERNAL CONSISTENCY — this description must echo its variant's title and tags:
 - Paired title: {paired_title}

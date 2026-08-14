@@ -11,9 +11,8 @@ import structlog
 
 from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
 from src.config.prompts import (
-    JEWELRY_ADJECTIVE_LADDER,
-    NOUN_VARIATION_LADDER,
-    TITLE_GENERATION_PROMPT,
+    TITLE_DYNAMIC_TEMPLATE,
+    TITLE_STATIC_PREFIX,
 )
 from src.db.models import Product
 from src.domain.validators import validate_title
@@ -95,7 +94,9 @@ class TitleGenerator:
         Retries with a tighter prompt if all fail validation.
         """
         prompt = self._build_prompt(product, angle)
-        response = await self.llm.complete(prompt, max_tokens=800)
+        response = await self.llm.complete(
+            prompt=prompt, cached_prefix=TITLE_STATIC_PREFIX, max_tokens=800
+        )
         candidates = self._parse_titles(response)
 
         valid = []
@@ -122,13 +123,11 @@ class TitleGenerator:
     def _build_prompt(self, product: Product, angle: VariantAngle) -> str:
         keywords = self.pool.get_for_pillar(product.carrier_pillar)
         research_ctx = self.research.build_for_product(product)
-        return TITLE_GENERATION_PROMPT.format(
+        return TITLE_DYNAMIC_TEMPLATE.format(
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
             target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
-            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
-            noun_ladder=NOUN_VARIATION_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords — use product type)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,
@@ -155,13 +154,11 @@ class TitleGenerator:
         keywords = self.pool.get_for_pillar(product.carrier_pillar)
         research_ctx = self.research.build_for_product(product)
 
-        relaxed_prompt = TITLE_GENERATION_PROMPT.format(
+        relaxed_prompt = TITLE_DYNAMIC_TEMPLATE.format(
             product_type=product.carrier_pillar.replace("_", " ").title(),
             material=product.material or "Gold Plated",
             features=_extract_features(product),
             target_keyword=product.target_keyword or "(none specified — use your best niche keyword judgement)",
-            adjective_ladder=JEWELRY_ADJECTIVE_LADDER,
-            noun_ladder=NOUN_VARIATION_LADDER,
             keyword_pool=", ".join(keywords) if keywords else "(no pool keywords)",
             research_brief=research_ctx.format_for_prompt(),
             angle_label=angle.label,
@@ -173,7 +170,9 @@ class TitleGenerator:
             ),
         )
 
-        response = await self.llm.complete(relaxed_prompt, max_tokens=800)
+        response = await self.llm.complete(
+            prompt=relaxed_prompt, cached_prefix=TITLE_STATIC_PREFIX, max_tokens=800
+        )
         candidates = self._parse_titles(response)
 
         valid = [

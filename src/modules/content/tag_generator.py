@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import structlog
 
-from src.config.prompts import TAG_GENERATION_PROMPT
+from src.config.prompts import TAG_DYNAMIC_TEMPLATE, TAG_STATIC_PREFIX
 from src.db.models import Product
 from src.domain.validators import validate_tags
 from src.modules.llm.angles import VariantAngle
@@ -101,7 +101,7 @@ class TagGenerator:
 
         angle_candidates = self._prepend_universals(angle_candidates)
 
-        prompt = TAG_GENERATION_PROMPT.format(
+        prompt = TAG_DYNAMIC_TEMPLATE.format(
             paired_title=paired_title,
             angle_label=angle.label,
             angle_instructions=angle.tag_instructions,
@@ -109,7 +109,9 @@ class TagGenerator:
             candidates=self._format_candidates(angle_candidates),
         )
 
-        response = await self.llm.complete(prompt, max_tokens=400)
+        response = await self.llm.complete(
+            prompt=prompt, cached_prefix=TAG_STATIC_PREFIX, max_tokens=400
+        )
         tags = self._parse_tags(response)
 
         is_valid, violations = validate_tags(tags, paired_title)
@@ -226,7 +228,7 @@ class TagGenerator:
         candidate_dicts = self._prepend_universals(candidate_dicts)
 
         violation_text = "; ".join(violations)
-        retry_prompt = TAG_GENERATION_PROMPT.format(
+        retry_prompt = TAG_DYNAMIC_TEMPLATE.format(
             paired_title=paired_title,
             angle_label=angle.label,
             angle_instructions=angle.tag_instructions,
@@ -234,7 +236,9 @@ class TagGenerator:
             candidates=self._format_candidates(candidate_dicts),
         ) + f"\n\nPREVIOUS ATTEMPT VIOLATIONS (fix these): {violation_text}"
 
-        response = await self.llm.complete(retry_prompt, max_tokens=400)
+        response = await self.llm.complete(
+            prompt=retry_prompt, cached_prefix=TAG_STATIC_PREFIX, max_tokens=400
+        )
         tags = self._parse_tags(response)
         is_valid, remaining = validate_tags(tags, paired_title)
         if not is_valid:
