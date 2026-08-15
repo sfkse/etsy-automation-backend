@@ -237,3 +237,35 @@ def test_first_offering_price_is_serialised_as_float():
     first_offering = payload["inventory"]["products"][0]["offerings"][0]
     assert isinstance(first_offering["price"], float)
     assert first_offering["quantity"] == 999
+
+
+def test_build_for_specific_variant():
+    """build(product, variant_id=...) uses THAT variant's content, not final_*.
+
+    Multi-listing publish builds one payload per variant id — each listing must
+    carry its own title/tags/description drawn from generated_variants.
+    """
+    session = _session(
+        preset=_brass_preset(),
+        defaults=_defaults(),
+        personalization=None,
+        rows=_rows_brass_multi(),
+    )
+    product = _product(pers_id=None)
+    # final_* still mirrors the "primary" variant; the specific-variant build must
+    # ignore it and read variant B instead.
+    product.generated_variants = [
+        {"id": "A", "title": "Variant A Title", "tags": ["a1", "a2"],
+         "description": "A description."},
+        {"id": "B", "title": "Variant B Title", "tags": ["b1", "b2", "b3"],
+         "description": "B description."},
+    ]
+
+    builder = EtsyListingPayloadBuilder(session, settings=_settings())
+    payload = builder.build(product, variant_id="B")
+
+    assert payload["title"] == "Variant B Title"
+    assert payload["tags"] == ["b1", "b2", "b3"]
+    assert payload["description"] == "B description."
+    # And it did NOT fall back to final_* ("Test Title").
+    assert payload["title"] != product.final_title

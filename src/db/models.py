@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -80,11 +81,24 @@ class Product(Base):
     # Generated content (3 variants)
     generated_variants = Column(JSONB)
 
-    # Final selections (after human approval)
+    # Final selections (after human approval).
+    # Kept as a compatibility mirror of the FIRST published variant — read by the
+    # description-originality corpus, Sheets sync, the Etsy publisher, the internal
+    # linker, and the dashboard. See publish_variants() in modules/approval/service.py.
     final_title = Column(String(140))
     final_tags = Column(JSONB)
     final_description = Column(Text)
     selected_variant_id = Column(String(10))
+
+    # Multi-listing publish (Christmas-2 strategy): each chosen variant becomes its
+    # own Etsy listing. published_variant_ids holds the variant ids the user elected
+    # to publish, e.g. ["A", "B", "C"] or ["B"] or ["A", "HYBRID"].
+    published_variant_ids = Column(
+        JSONB, default=list, nullable=False, server_default="[]"
+    )
+    # Per-variant Etsy listing URLs pasted back after manual publishing:
+    # {"A": "https://etsy.com/...", "B": "..."}.
+    etsy_urls = Column(JSONB, default=dict, nullable=False, server_default="{}")
 
     # Etsy
     etsy_listing_id = Column(String(50))
@@ -125,6 +139,11 @@ class Product(Base):
     renew_logs = relationship("RenewLog", back_populates="product")
     variation_rows = relationship("VariationRow", back_populates="product", cascade="all, delete-orphan")
 
+    @property
+    def is_multi_published(self) -> bool:
+        """True when the product was published as more than one separate listing."""
+        return len(self.published_variant_ids or []) > 1
+
 
 class ProductImage(Base):
     __tablename__ = "product_images"
@@ -161,6 +180,28 @@ class ApprovalOverride(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product", back_populates="approval_overrides")
+
+
+class CopyPasteProgress(Base):
+    """Per-variant checklist state for the copy-paste helper.
+
+    One row per (product, variant, field) the user has ticked off while manually
+    pasting a published variant into Etsy. Field is one of:
+    title | tags | description | photos | variations | attributes.
+    """
+
+    __tablename__ = "copy_paste_progress"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id", "variant_id", "field", name="uq_copy_progress_field"
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    variant_id = Column(String(10), nullable=False)   # "A" | "B" | "C" | "HYBRID"
+    field = Column(String(20), nullable=False)
+    checked_at = Column(DateTime, default=datetime.utcnow)
 
 
 class KeywordPool(Base):

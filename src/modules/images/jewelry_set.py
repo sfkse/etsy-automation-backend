@@ -24,6 +24,7 @@ Chart selection:
   ``has_birthstone``.
 - Care instructions chart: always included.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -59,10 +60,10 @@ if TYPE_CHECKING:  # pragma: no cover
 @dataclass(frozen=True)
 class Palette:
     name: str
-    background: str      # background colours/surfaces
-    lighting: str        # light temperature/quality
-    props: str           # prop colours/materials
-    anchor: str          # short directive folded into every prompt's style hint
+    background: str  # background colours/surfaces
+    lighting: str  # light temperature/quality
+    props: str  # prop colours/materials
+    anchor: str  # short directive folded into every prompt's style hint
 
 
 PALETTES: dict[str, Palette] = {
@@ -106,9 +107,23 @@ PALETTES: dict[str, Palette] = {
             "tones, warm directional sunlight, organic cohesive colour grading"
         ),
     ),
+    "dusty_rose_ivory": Palette(
+        name="Dusty rose & ivory",
+        background=(
+            "soft muted pastel backgrounds in dusty rose and warm ivory tones "
+        ),
+        lighting="soft studio side-lighting with a subtle warm ambient glow",
+        props="dusty-rose silk and warm-ivory ceramic props",
+        anchor=(
+            "consistent dusty-rose-and-ivory palette, muted pastel dusty rose and "
+            "warm ivory tones, soft studio side-lighting with warm ambient glow, "
+            "cinematic depth of field with soft bokeh, ultra-realistic detail, "
+            "minimalist commercial colour grading"
+        ),
+    ),
 }
 
-ACTIVE_PALETTE = "warm_ivory_gold"
+ACTIVE_PALETTE = "cool_minimal_white"
 _P = PALETTES[ACTIVE_PALETTE]
 
 
@@ -117,17 +132,29 @@ _P = PALETTES[ACTIVE_PALETTE]
 # palette so the six shots colour-match each other.
 
 _MANNEQUIN_PROMPTS = [
-    f"Close-up of a woman gently holding the necklace pendant between her thumb and "
-    f"forefinger near her collarbone, pendant sharp and centered against softly blurred "
-    f"skin, shallow depth of field, natural manicured nails, gentle {_P.lighting}, "
-    f"{_P.background}, intimate tactile editorial close-up, "
+    # M1 — intimate macro, hand present, shot from the front (COVER — pendant centered & hero)
+    f"Tight close-up of a woman gently holding the necklace pendant between her thumb and "
+    f"forefinger near her collarbone, camera moved in close so the pendant sits in the "
+    f"centre of the frame and clearly commands the composition, pendant tack-sharp with "
+    f"the chain visible resting on the skin, shallow depth of field, natural manicured "
+    f"nails, real un-retouched skin with visible pores and fine texture, gentle "
+    f"{_P.lighting}, {_P.background}, candid intimate tactile moment, shot on 85mm lens, "
+    f"subtle film grain, balanced centred framing with no large empty areas, "
     f"face NOT visible in frame, cropped at chin at most",
-    f"Three-quarter bust shot from collarbone to lower jaw only, no face detail, "
-    f"head cropped out of frame, wearing the necklace, {_P.lighting}, "
-    f"{_P.background}, editorial lifestyle photography",
-    f"Close-up bust shot focused on the necklace against skin, gentle {_P.lighting}, "
-    f"blurred {_P.background}, high detail, "
-    f"face and eyes NOT visible, only chin and neck at most",
+    # M2 — side / three-quarter profile angle, product is the hero and stays tack-sharp
+    f"Side three-quarter angle of the necklace worn on a woman's neck and collarbone, "
+    f"the pendant and chain tack-sharp and the clear focal point of the frame, filling a "
+    f"generous portion of the composition, skin and a plain soft cream neckline falling "
+    f"gently out of focus so nothing competes with the jewelry, natural {_P.lighting}, "
+    f"blurred {_P.background}, natural skin texture, shot on 85mm lens, gentle film grain, "
+    f"head turned so the face is NOT visible, cropped above the jaw",
+    # M3 — straight-on frontal extreme macro of the pendant in the hollow of the throat
+    f"Straight-on frontal extreme macro of the pendant resting in the hollow of the "
+    f"throat against bare skin, no hands, ultra-shallow depth of field with the chain "
+    f"falling softly out of focus, {_P.lighting} raking across the skin to reveal fine "
+    f"natural texture and the metal's finish, blurred {_P.background}, editorial jewelry "
+    f"detail, shot on 100mm macro lens, "
+    f"face and eyes NOT visible, only the throat and upper chest in frame",
 ]
 
 _CONCEPT_PROMPTS = [
@@ -141,6 +168,9 @@ _CONCEPT_PROMPTS = [
 
 _STYLE_HINT = (
     f"professional jewelry photography, {_P.anchor}, high quality, sharp focus, "
+    f"authentic real-world photograph with natural imperfections and genuine skin "
+    f"texture, soft natural light falloff, NOT an over-smoothed plastic CGI render, "
+    f"no waxy skin, no artificial glossy over-processing, "
     f"product is small and delicate — do NOT exaggerate its size, realistic dainty "
     f"jewelry proportions matching the reference photo."
 )
@@ -240,8 +270,8 @@ async def generate_jewelry_set(
         asyncio.create_task(_bounded_generate(p))
         for p in (*_MANNEQUIN_PROMPTS, *_CONCEPT_PROMPTS)
     ]
-    ai_results: list[list[ImageGenerationResult] | BaseException] = await asyncio.gather(
-        *ai_tasks, return_exceptions=True
+    ai_results: list[list[ImageGenerationResult] | BaseException] = (
+        await asyncio.gather(*ai_tasks, return_exceptions=True)
     )
 
     def _first_or_none(item) -> Optional[ImageGenerationResult]:
@@ -266,9 +296,7 @@ async def generate_jewelry_set(
     charts_dir = output_dir / "charts"
 
     preset = (
-        session.query(VariationPreset)
-        .filter_by(id=product.variation_preset_id)
-        .first()
+        session.query(VariationPreset).filter_by(id=product.variation_preset_id).first()
         if product.variation_preset_id
         else None
     )

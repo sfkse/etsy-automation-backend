@@ -35,15 +35,27 @@ class EtsyListingPayloadBuilder:
         self.session = session
         self.settings = settings or session.query(ShopSettings).filter_by(id=1).first()
 
-    def build(self, product: Product, chosen_variant: Optional[dict] = None) -> dict:
+    def build(
+        self,
+        product: Product,
+        variant_id: Optional[str] = None,
+        chosen_variant: Optional[dict] = None,
+    ) -> dict:
         """
         Build the create-listing payload.
 
         Args:
             product: the Product row.
+            variant_id: id ("A"/"B"/"C"/"HYBRID") of the variant to build. When given
+                        (and ``chosen_variant`` is not), the matching entry is loaded
+                        from ``product.generated_variants``. This is the multi-listing
+                        entry point — each published variant is built by id.
             chosen_variant: dict-shaped ListingVariant (matches ``ListingVariant.to_dict``).
-                            When None, falls back to ``product.final_*`` fields.
+                            When both are None, falls back to ``product.final_*`` fields.
         """
+        if chosen_variant is None and variant_id:
+            from src.modules.approval.service import get_variant_by_id
+            chosen_variant = get_variant_by_id(product, variant_id)
         preset = (
             self.session.query(VariationPreset).get(product.variation_preset_id)
             if product.variation_preset_id

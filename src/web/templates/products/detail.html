@@ -65,6 +65,14 @@
     {% endif %}
 
     {% elif product.status == 'published' %}
+    {% if product.published_variant_ids %}
+    <a href="/approval/{{ product.sku }}/copy-paste-helper" class="btn btn-success">
+      📋 Copy-Paste Helper ({{ product.published_variant_ids | join(' ') }})
+    </a>
+    {% endif %}
+    <a href="/approval/{{ product.sku }}" class="btn btn-outline-secondary">
+      ↩ Back to variants
+    </a>
     {% if product.etsy_listing_id %}
     <a href="https://www.etsy.com/listing/{{ product.etsy_listing_id }}" target="_blank" rel="noopener" class="btn btn-outline-success">
       🔗 View Live Listing ↗

@@ -22,6 +22,13 @@
 <!-- Hidden overrides accumulator -->
 <input type="hidden" id="overrides-store" value="[]">
 
+<!-- ── Multi-publish guidance ──────────────────────────────────────────────── -->
+<div class="alert alert-info d-flex align-items-start gap-2 py-2 px-3 small mb-3" role="note">
+  <span aria-hidden="true">💡</span>
+  <span>Trainer recommends publishing all 3 variants as separate listings — same
+    photos, different titles/tags. See which one Etsy's algorithm favors.</span>
+</div>
+
 <!-- ── 3-Column Variant Grid ───────────────────────────────────────────────── -->
 <form id="approve-form" method="post" action="/approval/{{ product.sku }}/approve">
   <input type="hidden" name="variant_id" id="selected-variant-input" value="{{ selected_id }}">
@@ -51,6 +58,17 @@
         </div>
 
         <div class="card-body p-3 d-flex flex-column gap-3">
+
+          <!-- Publish this variant as its own Etsy listing -->
+          <div class="form-check bg-light rounded p-2 mb-0 border">
+            <input class="form-check-input publish-checkbox" type="checkbox"
+                   name="variant_ids" value="{{ vid }}" id="publish-{{ vid }}"
+                   form="approve-form"
+                   {% if published_variant_ids %}{% if vid in published_variant_ids %}checked{% endif %}{% else %}checked{% endif %}>
+            <label class="form-check-label small fw-semibold" for="publish-{{ vid }}">
+              Publish this variant as a separate Etsy listing
+            </label>
+          </div>
 
           <!-- Strategy Rationale -->
           <div class="border-start border-3 border-secondary ps-2 text-muted small">
@@ -248,7 +266,17 @@
   <div class="card border-0 shadow-sm mb-5">
     <div class="card-body d-flex flex-wrap gap-2 align-items-center">
 
-      <button type="submit" class="btn btn-warning fw-semibold px-4" id="approve-btn">
+      <button type="submit" class="btn btn-success fw-semibold px-4" id="publish-selected-btn"
+              formaction="/approval/{{ product.sku }}/publish">
+        🚀 Publish Selected as Separate Listings
+      </button>
+
+      <button type="button" class="btn btn-outline-success"
+              onclick="publishBest()">
+        ⭐ Publish Only Best (single listing)
+      </button>
+
+      <button type="submit" class="btn btn-outline-warning" id="approve-btn">
         ✅ Approve selected variant
       </button>
 
@@ -526,6 +554,21 @@ document.querySelectorAll('.editable-field').forEach(el => {
     await autosave(variantId, field, value);
   });
 });
+
+
+// ── Publish only the single selected (radio) variant ──────────────────────────
+function publishBest() {
+  const vid = document.getElementById('selected-variant-input').value;
+  if (!vid) { alert('Pick a variant (radio) first.'); return; }
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = `/approval/${SKU}/publish`;
+  const inp = document.createElement('input');
+  inp.type = 'hidden'; inp.name = 'variant_ids'; inp.value = vid;
+  form.appendChild(inp);
+  document.body.appendChild(form);
+  form.submit();
+}
 
 
 // ── Save as draft ─────────────────────────────────────────────────────────────

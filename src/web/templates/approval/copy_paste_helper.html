@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+{% block title %}Copy-Paste Helper {{ product.sku }} — Etsy Automation{% endblock %}
+
+{% block content %}
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<div class="d-flex align-items-start justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <a href="/approval/{{ product.sku }}" class="text-muted text-decoration-none small">← Back to variants</a>
+    <h2 class="mb-0 mt-1 d-flex align-items-center gap-2">
+      <code>{{ product.sku }}</code>
+      <span class="badge bg-success fw-normal fs-6">
+        Published: {{ panels | map(attribute='variant_id') | join(' ') }}
+      </span>
+    </h2>
+    <p class="text-muted mb-0">
+      Copy each field into a <strong>separate Etsy listing</strong> — same photos,
+      same variations, different title/tags. Tick the checklist as you go.
+    </p>
+  </div>
+  {% if product.sku %}
+  <a href="/approval/{{ product.sku }}/images.zip" class="btn btn-outline-primary btn-sm">
+    ↓ Download all photos (.zip)
+  </a>
+  {% endif %}
+</div>
+
+<!-- ── One collapsible panel per published variant ─────────────────────────── -->
+{% for panel in panels %}
+<details class="card border-0 shadow-sm mb-3 variant-panel"
+         data-variant-id="{{ panel.variant_id }}" {% if loop.first %}open{% endif %}>
+  <summary class="card-header bg-white border-bottom d-flex align-items-center gap-2 py-2"
+           style="cursor:pointer; list-style:none;">
+    <span class="badge bg-success fs-6">Variant {{ panel.variant_id }}</span>
+    {% if panel.strategy_label %}
+    <span class="text-muted small">{{ panel.strategy_label }}</span>
+    {% endif %}
+    <span class="badge bg-light text-dark border ms-auto progress-badge"
+          id="progress-badge-{{ panel.variant_id }}">
+      {{ panel.checked_fields | length }}/{{ copy_fields | length }} done
+    </span>
+  </summary>
+
+  <div class="card-body">
+    <div class="row g-3">
+
+      <!-- Left: copyable content -->
+      <div class="col-lg-7 d-flex flex-column gap-3">
+
+        <!-- Title -->
+        <div>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Title</label>
+            <button type="button" class="btn btn-sm btn-outline-primary copy-btn"
+                    data-copy-target="title-{{ panel.variant_id }}">📋 Copy Title</button>
+          </div>
+          <div class="border rounded p-2 small" id="title-{{ panel.variant_id }}">{{ panel.title }}</div>
+        </div>
+
+        <!-- Tags -->
+        <div>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">
+              Tags ({{ panel.tags | length }})
+            </label>
+            <button type="button" class="btn btn-sm btn-outline-primary copy-btn"
+                    data-copy-target="tags-{{ panel.variant_id }}">📋 Copy All Tags</button>
+          </div>
+          <div class="border rounded p-2 small font-monospace" id="tags-{{ panel.variant_id }}">{{ panel.tags_csv }}</div>
+        </div>
+
+        <!-- Description -->
+        <div>
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Description</label>
+            <button type="button" class="btn btn-sm btn-outline-primary copy-btn"
+                    data-copy-target="description-{{ panel.variant_id }}">📋 Copy Description</button>
+          </div>
+          <div class="border rounded p-2 small" id="description-{{ panel.variant_id }}"
+               style="white-space:pre-wrap;">{{ panel.description }}</div>
+        </div>
+
+      </div>
+
+      <!-- Right: checklist + Etsy URL -->
+      <div class="col-lg-5">
+        <h6 class="text-muted small text-uppercase fw-semibold mb-2" style="letter-spacing:.06em;">Paste checklist</h6>
+        <div class="list-group mb-3">
+          {% for field in copy_fields %}
+          <label class="list-group-item d-flex align-items-center gap-2">
+            <input class="form-check-input mt-0 progress-check" type="checkbox"
+                   data-variant-id="{{ panel.variant_id }}"
+                   data-field="{{ field }}"
+                   {% if field in panel.checked_fields %}checked{% endif %}>
+            <span class="text-capitalize">{{ field }}</span>
+          </label>
+          {% endfor %}
+        </div>
+
+        <!-- Etsy URL — revealed once all fields are checked -->
+        <div class="etsy-url-box {% if not panel.all_checked %}d-none{% endif %}"
+             id="etsy-url-box-{{ panel.variant_id }}">
+          <label class="form-label small fw-semibold">Etsy listing URL (optional)</label>
+          <input type="url" class="form-control form-control-sm etsy-url-input"
+                 data-variant-id="{{ panel.variant_id }}"
+                 placeholder="https://www.etsy.com/listing/..."
+                 value="{{ panel.etsy_url }}">
+          <div class="form-text etsy-url-saved" id="etsy-url-saved-{{ panel.variant_id }}"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</details>
+{% endfor %}
+
+{% endblock %}
+
+
+{% block extra_scripts %}
+<script>
+const SKU = "{{ product.sku }}";
+const TOTAL_FIELDS = {{ copy_fields | length }};
+
+// ── Copy-to-clipboard ─────────────────────────────────────────────────────────
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const el = document.getElementById(btn.dataset.copyTarget);
+    if (!el) return;
+    const text = el.innerText;
+    try {
+      await navigator.clipboard.writeText(text);
+      const original = btn.innerHTML;
+      btn.innerHTML = '✓ Copied';
+      btn.classList.replace('btn-outline-primary', 'btn-success');
+      setTimeout(() => {
+        btn.innerHTML = original;
+        btn.classList.replace('btn-success', 'btn-outline-primary');
+      }, 1200);
+    } catch (e) {
+      console.error('clipboard error', e);
+      alert('Copy failed — select and copy manually.');
+    }
+  });
+});
+
+// ── Checklist persistence ──────────────────────────────────────────────────────
+document.querySelectorAll('.progress-check').forEach(chk => {
+  chk.addEventListener('change', async () => {
+    const variantId = chk.dataset.variantId;
+    const field = chk.dataset.field;
+    try {
+      const resp = await fetch(`/approval/${SKU}/copy-progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variant_id: variantId, field, checked: chk.checked }),
+      });
+      const data = await resp.json();
+      updateProgressBadge(variantId);
+      const box = document.getElementById('etsy-url-box-' + variantId);
+      if (box) box.classList.toggle('d-none', !data.all_checked);
+    } catch (e) {
+      console.error('progress error', e);
+    }
+  });
+});
+
+function updateProgressBadge(variantId) {
+  const checks = document.querySelectorAll(
+    `.progress-check[data-variant-id="${variantId}"]`);
+  const done = Array.from(checks).filter(c => c.checked).length;
+  const badge = document.getElementById('progress-badge-' + variantId);
+  if (badge) badge.textContent = `${done}/${TOTAL_FIELDS} done`;
+}
+
+// ── Etsy URL save on blur ──────────────────────────────────────────────────────
+document.querySelectorAll('.etsy-url-input').forEach(inp => {
+  inp.addEventListener('blur', async () => {
+    const variantId = inp.dataset.variantId;
+    try {
+      const resp = await fetch(`/approval/${SKU}/etsy-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variant_id: variantId, url: inp.value.trim() }),
+      });
+      const data = await resp.json();
+      const saved = document.getElementById('etsy-url-saved-' + variantId);
+      if (saved && data.saved) {
+        saved.textContent = '✓ Saved';
+        setTimeout(() => { saved.textContent = ''; }, 1500);
+      }
+    } catch (e) {
+      console.error('etsy-url error', e);
+    }
+  });
+});
+</script>
+{% endblock %}

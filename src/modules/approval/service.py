@@ -18,7 +18,13 @@ import structlog
 from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
-from src.db.models import ApprovalOverride, Product, ProductStatus, VariationRow
+from src.db.models import (
+    ApprovalOverride,
+    CopyPasteProgress,
+    Product,
+    ProductStatus,
+    VariationRow,
+)
 from src.domain.validators import validate_tags, validate_title
 from src.modules.sheets.sync import upsert_product_row
 
@@ -230,6 +236,120 @@ def reject_and_regenerate(session: Session, product: Product) -> None:
     session.commit()
     upsert_product_row(product, _settings)
     _log.info("product_rejected_for_regen", sku=product.sku)
+
+
+# ── Multi-listing publish ─────────────────────────────────────────────────────
+
+# The six things the user must copy into each Etsy listing. The copy-paste helper
+# reveals the "Etsy listing URL" input once all six are ticked for a variant.
+COPY_PASTE_FIELDS: tuple[str, ...] = (
+    "title",
+    "tags",
+    "description",
+    "photos",
+    "variations",
+    "attributes",
+)
+
+
+def publish_variants(
+    session: Session,
+    product: Product,
+    variant_ids: list[str],
+) -> bool:
+    """
+    Mark the selected variants as published — each becomes its own Etsy listing.
+
+    No Etsy API call happens; the user copy-pastes manually via the helper page.
+    Sets ``published_variant_ids`` to the (validated, order-preserved) selection and
+    mirrors the FIRST published variant into the legacy ``final_*`` /
+    ``selected_variant_id`` fields for the originality corpus, Sheets sync, publisher,
+    internal linker, and dashboard. Returns False if none of the ids are valid.
+    """
+    valid = [vid for vid in variant_ids if get_variant_by_id(product, vid)]
+    if not valid:
+        return False
+
+    product.published_variant_ids = valid
+
+    primary = get_variant_by_id(product, valid[0]) or {}
+    product.final_title = primary.get("title", "")
+    product.final_tags = primary.get("tags", [])
+    product.final_description = primary.get("description", "")
+    product.selected_variant_id = valid[0]
+
+    product.status = ProductStatus.PUBLISHED.value
+    product.published_at = datetime.utcnow()
+
+    session.commit()
+    upsert_product_row(product, _settings)
+    _log.info("product_published", sku=product.sku, variants=valid)
+    return True
+
+
+def get_copy_progress(session: Session, product_id: int) -> dict[str, list[str]]:
+    """Return {variant_id: [checked fields]} for the copy-paste helper."""
+    rows = (
+        session.query(CopyPasteProgress)
+        .filter_by(product_id=product_id)
+        .all()
+    )
+    progress: dict[str, list[str]] = {}
+    for r in rows:
+        progress.setdefault(r.variant_id, []).append(r.field)
+    return progress
+
+
+def toggle_copy_progress(
+    session: Session,
+    product_id: int,
+    variant_id: str,
+    field: str,
+    checked: bool,
+) -> bool:
+    """Tick/untick one checklist field. Returns True when all six fields are checked
+    for the variant (the helper then reveals the Etsy-URL input)."""
+    if field not in COPY_PASTE_FIELDS:
+        return False
+
+    row = (
+        session.query(CopyPasteProgress)
+        .filter_by(product_id=product_id, variant_id=variant_id, field=field)
+        .first()
+    )
+    if checked and row is None:
+        session.add(
+            CopyPasteProgress(
+                product_id=product_id, variant_id=variant_id, field=field
+            )
+        )
+    elif not checked and row is not None:
+        session.delete(row)
+    session.commit()
+
+    checked_count = (
+        session.query(CopyPasteProgress)
+        .filter_by(product_id=product_id, variant_id=variant_id)
+        .count()
+    )
+    return checked_count >= len(COPY_PASTE_FIELDS)
+
+
+def set_etsy_url(
+    session: Session,
+    product: Product,
+    variant_id: str,
+    url: str,
+) -> None:
+    """Persist the Etsy listing URL pasted back for a published variant."""
+    urls: dict = copy.deepcopy(product.etsy_urls or {})
+    if url:
+        urls[variant_id] = url
+    else:
+        urls.pop(variant_id, None)
+    product.etsy_urls = urls
+    session.commit()
+    _log.info("etsy_url_saved", sku=product.sku, variant=variant_id)
 
 
 # ── Validation helpers ────────────────────────────────────────────────────────

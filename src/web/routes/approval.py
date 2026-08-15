@@ -28,12 +28,17 @@ from src.config.business_rules import MIN_IMAGES_PER_LISTING
 from src.db.dependencies import get_session
 from src.db.models import Product, ProductImage, ProductStatus
 from src.modules.approval.service import (
+    COPY_PASTE_FIELDS,
     approve_hybrid_variant,
     approve_variant,
     get_approval_queue,
+    get_copy_progress,
     get_variant_by_id,
     get_variation_matrix,
+    publish_variants,
     reject_and_regenerate,
+    set_etsy_url,
+    toggle_copy_progress,
     update_variant_field,
     validate_field,
 )
@@ -163,6 +168,7 @@ async def approval_detail(
             "product": product,
             "variants": variants,
             "selected_id": selected_id,
+            "published_variant_ids": product.published_variant_ids or [],
             "images": images,
             "variations": variations,
             "ctr_badge": CTR_BADGE,
@@ -269,7 +275,7 @@ async def payload_preview(
         return JSONResponse({"error": "not found"}, status_code=404)
 
     chosen = get_variant_by_id(product, variant_id) if variant_id else None
-    payload = EtsyListingPayloadBuilder(session).build(product, chosen)
+    payload = EtsyListingPayloadBuilder(session).build(product, chosen_variant=chosen)
     return JSONResponse(jsonable_encoder(payload))
 
 
@@ -296,6 +302,127 @@ async def approve_selected(
         return RedirectResponse(url=f"/approval/{sku}", status_code=303)
 
     return RedirectResponse(url=f"/products/{sku}", status_code=303)
+
+
+# ── Publish selected variants as separate listings ────────────────────────────
+
+@router.post("/{sku}/publish")
+async def publish_selected(
+    sku: str,
+    variant_ids: list[str] = Form(default=[]),
+    session: Session = Depends(get_session),
+):
+    """Mark the checked variants as published (each is its own Etsy listing) and
+    redirect to the copy-paste helper. No Etsy API call — the user pastes manually.
+
+    Both approval-detail submit buttons post here: "Publish Selected as Separate
+    Listings" sends the checkbox group; "Publish Only Best" sends a single id."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/approval", status_code=303)
+
+    if not publish_variants(session, product, variant_ids):
+        # Nothing valid selected — bounce back to the comparison view.
+        return RedirectResponse(url=f"/approval/{sku}", status_code=303)
+
+    return RedirectResponse(
+        url=f"/approval/{sku}/copy-paste-helper", status_code=303
+    )
+
+
+# ── Copy-paste helper (per-variant manual publish workflow) ────────────────────
+
+@router.get("/{sku}/copy-paste-helper", response_class=HTMLResponse)
+async def copy_paste_helper(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url="/approval", status_code=303)
+
+    published = product.published_variant_ids or []
+    if not published:
+        return RedirectResponse(url=f"/approval/{sku}", status_code=303)
+
+    builder = EtsyListingPayloadBuilder(session)
+    progress = get_copy_progress(session, product.id)
+    etsy_urls = product.etsy_urls or {}
+
+    panels = []
+    for vid in published:
+        variant = get_variant_by_id(product, vid) or {}
+        payload = builder.build(product, variant_id=vid)
+        tags = payload.get("tags", []) or []
+        panels.append({
+            "variant_id": vid,
+            "strategy_label": variant.get("strategy_label", ""),
+            "title": payload.get("title", ""),
+            "tags": tags,
+            "tags_csv": ", ".join(tags),
+            "description": payload.get("description", ""),
+            "checked_fields": progress.get(vid, []),
+            "all_checked": len(progress.get(vid, [])) >= len(COPY_PASTE_FIELDS),
+            "etsy_url": etsy_urls.get(vid, ""),
+        })
+
+    return _tmpl(
+        "approval/copy_paste_helper.html",
+        request,
+        {
+            "product": product,
+            "panels": panels,
+            "copy_fields": COPY_PASTE_FIELDS,
+            "status_labels": STATUS_LABELS,
+            "status_badge_class": STATUS_BADGE_CLASS,
+        },
+    )
+
+
+@router.post("/{sku}/copy-progress")
+async def update_copy_progress(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Persist one checklist toggle. Returns whether the variant is now fully
+    checked so the client can reveal the Etsy-URL input."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    body = await request.json()
+    variant_id = body.get("variant_id", "")
+    field = body.get("field", "")
+    checked = bool(body.get("checked", False))
+
+    if not variant_id or field not in COPY_PASTE_FIELDS:
+        return JSONResponse({"error": "variant_id and valid field required"}, status_code=422)
+
+    all_checked = toggle_copy_progress(session, product.id, variant_id, field, checked)
+    return JSONResponse({"ok": True, "all_checked": all_checked})
+
+
+@router.post("/{sku}/etsy-url")
+async def save_etsy_url(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Save the Etsy listing URL the user pasted back for a published variant."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    body = await request.json()
+    variant_id = body.get("variant_id", "")
+    url = (body.get("url") or "").strip()
+    if not variant_id:
+        return JSONResponse({"error": "variant_id required"}, status_code=422)
+
+    set_etsy_url(session, product, variant_id, url)
+    return JSONResponse({"saved": True})
 
 
 # ── Save as draft (stay on page) ──────────────────────────────────────────────

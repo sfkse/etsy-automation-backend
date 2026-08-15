@@ -52,6 +52,14 @@
             <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }}">
               {{ status_labels.get(product.status, product.status) }}
             </span>
+            {% if product.published_variant_ids %}
+            <a href="/approval/{{ product.sku }}/copy-paste-helper"
+               class="badge bg-success-subtle text-success-emphasis border border-success-subtle text-decoration-none"
+               onclick="event.stopPropagation();"
+               title="Open the copy-paste helper for {{ product.published_variant_ids | length }} listing(s)">
+              📋 Published: {{ product.published_variant_ids | join(' ') }}
+            </a>
+            {% endif %}
           </td>
           <td class="text-end text-muted">
             {% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}
