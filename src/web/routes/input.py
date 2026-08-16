@@ -27,16 +27,27 @@ from src.db.models import (
     ProductStats,
     ProductStatus,
     RenewLog,
+    ShopSettings,
     VariationRow,
 )
+from src.modules.images import regen_jobs
 from src.modules.images.comparison import run_comparison
+from src.modules.images.jewelry_set import DEFAULT_PALETTE, palette_choices
 from src.modules.images.pipeline import run_image_pipeline
 from src.modules.images.regenerate import (
-    SLOTS,
+    SLOT_ORDER,
+    _slot_path,
     generate_slot_candidates,
     regenerate_slot,
     select_candidate,
     valid_slot,
+)
+from src.modules.video import video_jobs
+from src.modules.video.factory import DURATION_OPTIONS, VideoWorkflowFactory
+from src.modules.video.generate import (
+    DEFAULT_MOTION_PROMPT,
+    generate_slot_video,
+    video_path,
 )
 from src.modules.products.service import (
     EDITABLE_PRODUCT_FIELDS,
@@ -369,17 +380,30 @@ async def product_status(
 
 # ── Per-slot image management (regenerate / compare backends) ──────────────────
 
-_SLOT_ORDER = ["mannequin-1", "mannequin-2", "mannequin-3",
-               "concept-1", "concept-2", "concept-3"]
-
 
 def _slot_of(file_path: str) -> str | None:
     """Derive the slot id (e.g. 'mannequin-1') from an AI image filename."""
     name = file_path.rsplit("/", 1)[-1]
-    for slot in _SLOT_ORDER:
+    for slot in SLOT_ORDER:
         if name.endswith(f"-{slot}.jpg"):
             return slot
     return None
+
+
+def _slot_public_url(file_path: str | None) -> str | None:
+    """Public ``/images/...`` URL for a slot photo, cache-busted by file mtime.
+
+    The ``?v=<mtime>`` suffix makes a regenerated (overwritten-in-place) photo
+    show on refresh instead of the browser's cached copy of the same URL.
+    """
+    if not file_path:
+        return None
+    url = "/images/" + file_path.split("data/images/")[-1]
+    try:
+        url += f"?v={int(_DeletePath(file_path).stat().st_mtime)}"
+    except OSError:
+        pass
+    return url
 
 
 @router.get("/{sku}/images", response_class=HTMLResponse)
@@ -404,24 +428,22 @@ async def images_page(
         if slot:
             by_slot[slot] = r
 
+    shop_settings = session.query(ShopSettings).filter_by(id=1).first()
+    default_palette = getattr(shop_settings, "image_palette", None) or DEFAULT_PALETTE
+
     slots = []
-    for slot in _SLOT_ORDER:
+    for slot in SLOT_ORDER:
         row = by_slot.get(slot)
-        url = None
-        if row and row.file_path:
-            url = "/images/" + row.file_path.split("data/images/")[-1]
-            # Cache-bust by file mtime so a regenerated (overwritten-in-place) photo
-            # shows on refresh instead of the browser's cached copy of the same URL.
-            try:
-                url += f"?v={int(_DeletePath(row.file_path).stat().st_mtime)}"
-            except OSError:
-                pass
+        url = _slot_public_url(row.file_path if row else None)
+        vpath = video_path(product, _settings, slot)
         slots.append({
             "slot": slot,
             "label": slot.replace("-", " ").title(),
             "url": url,
+            "video_url": _slot_public_url(str(vpath)) if vpath.exists() else None,
             "workflow": row.workflow_source if row else None,
             "instructions": (row.regen_instructions if row else "") or "",
+            "palette": (row.palette_used if row else None) or default_palette,
         })
 
     return _tmpl(
@@ -430,6 +452,11 @@ async def images_page(
             "product": product,
             "slots": slots,
             "workflows": ["gemini", "openai"],
+            "palettes": palette_choices(),
+            "default_palette": default_palette,
+            "default_motion_prompt": DEFAULT_MOTION_PROMPT,
+            "video_models": VideoWorkflowFactory.available_workflows(),
+            "video_duration_options": DURATION_OPTIONS,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
         },
@@ -439,26 +466,95 @@ async def images_page(
 @router.post("/{sku}/images/regenerate")
 async def images_regenerate(
     sku: str,
+    background_tasks: BackgroundTasks,
     slot: str = Form(...),
     workflow: str = Form(...),
     instructions: str = Form(""),
+    palette: str = Form(""),
     session: Session = Depends(get_session),
 ):
+    """Kick off a per-slot regeneration as a background task.
+
+    Returns immediately with ``{"status": "started"}`` — the work outlives this
+    request, and its progress is tracked in ``regen_jobs`` so the images page can
+    show a spinner (even after a reload) and swap in the finished photo by polling
+    ``/images/status``.
+    """
     product = session.query(Product).filter_by(sku=sku).first()
     if product is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
+    if regen_jobs.is_running(sku, slot):
+        return JSONResponse(
+            {"error": f"slot {slot} is already regenerating"}, status_code=409
+        )
+
+    regen_jobs.mark_running(sku, slot)
+    background_tasks.add_task(
+        _regenerate_bg, sku, slot, workflow, instructions, palette
+    )
+    return JSONResponse({"status": "started", "slot": slot, "workflow": workflow})
+
+
+async def _regenerate_bg(
+    sku: str, slot: str, workflow: str, instructions: str, palette: str
+) -> None:
+    """Background worker: regenerate one slot with its own DB session.
+
+    Always clears the ``regen_jobs`` running flag (recording the error on
+    failure) so a stuck slot can never spin forever.
+    """
+    from src.db.session import SessionLocal
+
+    error: str | None = None
     try:
-        row = await regenerate_slot(product, session, _settings, slot, workflow, instructions)
+        with SessionLocal() as bg_session:
+            product = bg_session.query(Product).filter_by(sku=sku).first()
+            if product is None:
+                return
+            await regenerate_slot(
+                product, bg_session, _settings, slot, workflow, instructions, palette
+            )
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": str(exc)}, status_code=500)
-    url = "/images/" + row.file_path.split("data/images/")[-1]
-    return JSONResponse({
-        "slot": slot, "workflow": workflow, "url": url,
-        # cache-bust so the browser reloads the overwritten file
-        "cache_url": f"{url}?t={int(__import__('time').time())}",
-    })
+        error = str(exc)
+    finally:
+        regen_jobs.mark_done(sku, slot, error=error)
+
+
+@router.get("/{sku}/images/status")
+async def images_status(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """Per-slot regeneration status for JS polling on the images page."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    rows = (
+        session.query(ProductImage)
+        .filter_by(product_id=product.id, is_real=False)
+        .all()
+    )
+    by_slot = {}
+    for r in rows:
+        s = _slot_of(r.file_path or "")
+        if s:
+            by_slot[s] = r
+
+    running = regen_jobs.running_slots(sku)
+    slots = {}
+    for slot in SLOT_ORDER:
+        row = by_slot.get(slot)
+        slots[slot] = {
+            "running": slot in running,
+            "url": _slot_public_url(row.file_path if row else None),
+            "workflow": row.workflow_source if row else None,
+            "error": regen_jobs.error_of(sku, slot),
+        }
+
+    return JSONResponse({"slots": slots, "any_running": bool(running)})
 
 
 @router.post("/{sku}/images/compare")
@@ -466,6 +562,7 @@ async def images_compare(
     sku: str,
     slot: str = Form(...),
     instructions: str = Form(""),
+    palette: str = Form(""),
     session: Session = Depends(get_session),
 ):
     product = session.query(Product).filter_by(sku=sku).first()
@@ -474,7 +571,7 @@ async def images_compare(
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
     candidates = await generate_slot_candidates(
-        product, session, _settings, slot, instructions=instructions
+        product, session, _settings, slot, instructions=instructions, palette=palette
     )
     return JSONResponse({
         "slot": slot,
@@ -499,6 +596,7 @@ async def images_select(
     slot: str = Form(...),
     workflow: str = Form(...),
     instructions: str = Form(""),
+    palette: str = Form(""),
     session: Session = Depends(get_session),
 ):
     product = session.query(Product).filter_by(sku=sku).first()
@@ -507,7 +605,9 @@ async def images_select(
     if not valid_slot(slot):
         return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
     try:
-        row = select_candidate(product, session, _settings, slot, workflow, instructions)
+        row = select_candidate(
+            product, session, _settings, slot, workflow, instructions, palette
+        )
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": str(exc)}, status_code=500)
     url = "/images/" + row.file_path.split("data/images/")[-1]
@@ -515,6 +615,97 @@ async def images_select(
         "slot": slot, "workflow": workflow, "url": url,
         "cache_url": f"{url}?t={int(__import__('time').time())}",
     })
+
+
+# ── Per-slot short video clips (image-to-video) ────────────────────────────────
+
+
+@router.post("/{sku}/images/video")
+async def images_video(
+    sku: str,
+    background_tasks: BackgroundTasks,
+    slot: str = Form(...),
+    prompt: str = Form(""),
+    duration: str = Form(""),
+    model: str = Form("dop"),
+    session: Session = Depends(get_session),
+):
+    """Kick off a per-slot video-clip generation as a background task.
+
+    Mirrors ``images_regenerate``: the work outlives this request and its
+    progress is tracked in ``video_jobs`` so the page can restore a spinner after
+    a reload and swap in the finished clip by polling ``/images/video/status``.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not valid_slot(slot):
+        return JSONResponse({"error": f"invalid slot {slot}"}, status_code=400)
+    if model not in VideoWorkflowFactory.available_workflows():
+        return JSONResponse({"error": f"invalid model {model}"}, status_code=400)
+    if not _slot_path(product, _settings, slot).exists():
+        return JSONResponse(
+            {"error": f"slot {slot} has no image to animate yet"}, status_code=400
+        )
+    if video_jobs.is_running(sku, slot):
+        return JSONResponse(
+            {"error": f"slot {slot} video is already generating"}, status_code=409
+        )
+
+    duration_int = int(duration) if duration.strip().isdigit() else None
+    video_jobs.mark_running(sku, slot)
+    background_tasks.add_task(
+        _generate_video_bg, sku, slot, prompt, duration_int, model
+    )
+    return JSONResponse({"status": "started", "slot": slot})
+
+
+async def _generate_video_bg(
+    sku: str, slot: str, prompt: str, duration: int | None, model: str
+) -> None:
+    """Background worker: generate one slot's clip with its own DB session.
+
+    Always clears the ``video_jobs`` running flag (recording the error on
+    failure) so a stuck slot can never spin forever.
+    """
+    from src.db.session import SessionLocal
+
+    error: str | None = None
+    try:
+        with SessionLocal() as bg_session:
+            product = bg_session.query(Product).filter_by(sku=sku).first()
+            if product is None:
+                return
+            await generate_slot_video(
+                product, bg_session, _settings, slot, prompt, duration, workflow=model
+            )
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+    finally:
+        video_jobs.mark_done(sku, slot, error=error)
+
+
+@router.get("/{sku}/images/video/status")
+async def images_video_status(
+    sku: str,
+    session: Session = Depends(get_session),
+):
+    """Per-slot video-generation status for JS polling on the images page."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    running = video_jobs.running_slots(sku)
+    slots = {}
+    for slot in SLOT_ORDER:
+        vpath = video_path(product, _settings, slot)
+        slots[slot] = {
+            "running": slot in running,
+            "url": _slot_public_url(str(vpath)) if vpath.exists() else None,
+            "error": video_jobs.error_of(sku, slot),
+        }
+
+    return JSONResponse({"slots": slots, "any_running": bool(running)})
 
 
 # ── Delete a product and all connected assets ──────────────────────────────────

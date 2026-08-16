@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.config.business_rules import CARRIER_PILLARS
+from src.modules.images.jewelry_set import palette_choices
 from src.db.dependencies import get_session
 from src.db.models import (
     DefaultAttributes,
@@ -385,13 +386,14 @@ class OperationsPatch(BaseModel):
     active_pillars: list[str] | None = None
     default_shipping_profile_id: str | None = None
     image_workflow_mode: str | None = None
+    image_palette: str | None = None
     auto_create_sections: bool | None = None
 
 
 _OPERATIONS_FIELDS = {
     "renewal_option", "return_policy_days", "feature_listing_default",
     "default_quantity", "omit_karat_in_title", "active_pillars",
-    "default_shipping_profile_id", "image_workflow_mode",
+    "default_shipping_profile_id", "image_workflow_mode", "image_palette",
     "auto_create_sections",
 }
 
@@ -555,5 +557,6 @@ def settings_index(request: Request, session: Session = Depends(get_session)):
             "carrier_pillars": CARRIER_PILLARS,
             "material_types": [e.value for e in MaterialType],
             "renewal_options": [e.value for e in RenewalOption],
+            "image_palettes": palette_choices(),
         },
     )

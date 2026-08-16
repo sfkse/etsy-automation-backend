@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
 
+    # Video provider — Higgsfield (image-to-video). Create keys at
+    # https://cloud.higgsfield.ai; auth header is "Key {ID}:{SECRET}".
+    HIGGSFIELD_API_KEY_ID: str = ""
+    HIGGSFIELD_API_KEY_SECRET: str = ""
+
     # Etsy OAuth
     ETSY_API_KEY: str = ""
     ETSY_SHARED_SECRET: str = ""
@@ -32,9 +37,15 @@ class Settings(BaseSettings):
     # Storage
     IMAGES_DIR: str = "./data/images"
 
+    # Public origin of this app (scheme + host[:port], no trailing slash), e.g.
+    # "https://abc123.ngrok.app". Required for video generation: the video
+    # provider fetches the source photo by URL and cannot reach localhost.
+    PUBLIC_BASE_URL: str = ""
+
     # App
     LOG_LEVEL: str = "INFO"
     DEFAULT_IMAGE_WORKFLOW: Literal["gemini", "openai"] = "gemini"
+    DEFAULT_VIDEO_WORKFLOW: Literal["dop", "kling"] = "dop"
 
     # Phase 3 — Research
     REQUIRE_RESEARCH_FOR_GENERATION: bool = False

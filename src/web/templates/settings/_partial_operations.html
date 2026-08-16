@@ -9,6 +9,16 @@
     </select>
   </div>
   <div class="col-md-6">
+    <label class="form-label small text-muted">Image palette (default)</label>
+    <select name="image_palette" class="form-select">
+      {% set palette = op.image_palette or 'cool_minimal_white' %}
+      {% for key, name in image_palettes %}
+      <option value="{{ key }}" {% if palette == key %}selected{% endif %}>{{ name }}</option>
+      {% endfor %}
+    </select>
+    <div class="form-text">Shop-wide default colour scheme for generated photos. Can be overridden per image on the regeneration page.</div>
+  </div>
+  <div class="col-md-6">
     <label class="form-label small text-muted">Active pillars</label>
     <select name="active_pillars" class="form-select" multiple size="6" data-array="multiselect">
       {% for pillar in carrier_pillars %}

@@ -13,7 +13,7 @@ Prompt guardrails (Christmas 1 training — ``docs/Christmas1.txt``):
 - Every mannequin shot crops the model's head out of frame ("Mankenin kafası
   falan gözükmemesi lazım"). A face by hand holding the product near it is fine,
   but bust/torso shots must not show the face — it distracts from the product.
-- ``_STYLE_HINT`` enforces small/dainty product proportions matching the
+- ``build_style_hint`` enforces small/dainty product proportions matching the
   reference photo, so the model doesn't exaggerate product size (a well-known
   1-star review pattern for dainty jewelry).
 
@@ -53,8 +53,10 @@ if TYPE_CHECKING:  # pragma: no cover
 # A single shared palette is applied to every generated photo so the whole set
 # (and the shop) reads as one cohesive brand instead of a grab-bag of
 # backgrounds. Each shot keeps its own *composition*; only the colour scheme,
-# lighting temperature and prop tones are unified. Switch the whole look by
-# changing ACTIVE_PALETTE — no other edits needed.
+# lighting temperature and prop tones are unified. The active palette is chosen
+# per generation (shop default via ShopSettings.image_palette, or a per-image
+# override at regeneration) and resolved through ``resolve_palette`` —
+# ``DEFAULT_PALETTE`` is the fallback.
 
 
 @dataclass(frozen=True)
@@ -123,57 +125,79 @@ PALETTES: dict[str, Palette] = {
     ),
 }
 
-ACTIVE_PALETTE = "cool_minimal_white"
-_P = PALETTES[ACTIVE_PALETTE]
+# The fallback palette used when no shop-level / per-image palette is chosen.
+DEFAULT_PALETTE = "soft_blush_neutral"
+
+
+def resolve_palette(key: str | None) -> Palette:
+    """Return the ``Palette`` for ``key``, falling back to ``DEFAULT_PALETTE``.
+
+    Unknown / missing keys never raise — they resolve to the default so a stale
+    setting can't break generation.
+    """
+    return PALETTES.get(key or DEFAULT_PALETTE, PALETTES[DEFAULT_PALETTE])
+
+
+def palette_choices() -> list[tuple[str, str]]:
+    """(key, human-name) pairs for populating a palette selector in the UI."""
+    return [(key, pal.name) for key, pal in PALETTES.items()]
 
 
 # ── Prompt templates ─────────────────────────────────────────────────────────
-# Compositions stay distinct; backgrounds/lighting/props reference the shared
-# palette so the six shots colour-match each other.
+# Compositions stay distinct; backgrounds/lighting/props reference the chosen
+# palette so the six shots colour-match each other. The palette is resolved per
+# generation (see ``generate_jewelry_set``) rather than baked in at import, so
+# it can be picked from the frontend.
 
-_MANNEQUIN_PROMPTS = [
-    # M1 — intimate macro, hand present, shot from the front (COVER — pendant centered & hero)
-    f"Tight close-up of a woman gently holding the necklace pendant between her thumb and "
-    f"forefinger near her collarbone, camera moved in close so the pendant sits in the "
-    f"centre of the frame and clearly commands the composition, pendant tack-sharp with "
-    f"the chain visible resting on the skin, shallow depth of field, natural manicured "
-    f"nails, real un-retouched skin with visible pores and fine texture, gentle "
-    f"{_P.lighting}, {_P.background}, candid intimate tactile moment, shot on 85mm lens, "
-    f"subtle film grain, balanced centred framing with no large empty areas, "
-    f"face NOT visible in frame, cropped at chin at most",
-    # M2 — side / three-quarter profile angle, product is the hero and stays tack-sharp
-    f"Side three-quarter angle of the necklace worn on a woman's neck and collarbone, "
-    f"the pendant and chain tack-sharp and the clear focal point of the frame, filling a "
-    f"generous portion of the composition, skin and a plain soft cream neckline falling "
-    f"gently out of focus so nothing competes with the jewelry, natural {_P.lighting}, "
-    f"blurred {_P.background}, natural skin texture, shot on 85mm lens, gentle film grain, "
-    f"head turned so the face is NOT visible, cropped above the jaw",
-    # M3 — straight-on frontal extreme macro of the pendant in the hollow of the throat
-    f"Straight-on frontal extreme macro of the pendant resting in the hollow of the "
-    f"throat against bare skin, no hands, ultra-shallow depth of field with the chain "
-    f"falling softly out of focus, {_P.lighting} raking across the skin to reveal fine "
-    f"natural texture and the metal's finish, blurred {_P.background}, editorial jewelry "
-    f"detail, shot on 100mm macro lens, "
-    f"face and eyes NOT visible, only the throat and upper chest in frame",
-]
 
-_CONCEPT_PROMPTS = [
-    f"The necklace displayed as a minimalist flat lay on {_P.background}, "
-    f"{_P.lighting} from top-left, styled with {_P.props}",
-    f"The necklace inside an opened branded gift box, {_P.lighting}, "
-    f"cozy gifting atmosphere with {_P.background} and {_P.props}",
-    f"Macro detail shot of the necklace pendant with {_P.background} in soft bokeh, "
-    f"{_P.lighting}, showcasing craftsmanship and finish",
-]
+def build_mannequin_prompts(p: Palette) -> list[str]:
+    return [
+        # M1 — intimate macro, hand present, shot from the front (COVER — pendant centered & hero)
+        f"Tight close-up of a woman gently holding the necklace pendant between her thumb and "
+        f"forefinger near her collarbone, camera moved in close so the pendant sits in the "
+        f"centre of the frame and clearly commands the composition, pendant tack-sharp with "
+        f"the chain visible resting on the skin, shallow depth of field, natural manicured "
+        f"nails, real un-retouched skin with visible pores and fine texture, gentle "
+        f"{p.lighting}, {p.background}, candid intimate tactile moment, shot on 85mm lens, "
+        f"subtle film grain, balanced centred framing with no large empty areas, "
+        f"face NOT visible in frame, cropped at chin at most",
+        # M2 — side / three-quarter profile angle, product is the hero and stays tack-sharp
+        f"Side three-quarter angle of the necklace worn on a woman's neck and collarbone, "
+        f"the pendant and chain tack-sharp and the clear focal point of the frame, filling a "
+        f"generous portion of the composition, skin and a plain soft cream neckline falling "
+        f"gently out of focus so nothing competes with the jewelry, natural {p.lighting}, "
+        f"blurred {p.background}, natural skin texture, shot on 85mm lens, gentle film grain, "
+        f"head turned so the face is NOT visible, cropped above the jaw",
+        # M3 — straight-on frontal extreme macro of the pendant in the hollow of the throat
+        f"Straight-on frontal extreme macro of the pendant resting in the hollow of the "
+        f"throat against bare skin, no hands, ultra-shallow depth of field with the chain "
+        f"falling softly out of focus, {p.lighting} raking across the skin to reveal fine "
+        f"natural texture and the metal's finish, blurred {p.background}, editorial jewelry "
+        f"detail, shot on 100mm macro lens, "
+        f"face and eyes NOT visible, only the throat and upper chest in frame",
+    ]
 
-_STYLE_HINT = (
-    f"professional jewelry photography, {_P.anchor}, high quality, sharp focus, "
-    f"authentic real-world photograph with natural imperfections and genuine skin "
-    f"texture, soft natural light falloff, NOT an over-smoothed plastic CGI render, "
-    f"no waxy skin, no artificial glossy over-processing, "
-    f"product is small and delicate — do NOT exaggerate its size, realistic dainty "
-    f"jewelry proportions matching the reference photo."
-)
+
+def build_concept_prompts(p: Palette) -> list[str]:
+    return [
+        f"The necklace displayed as a minimalist flat lay on {p.background}, "
+        f"{p.lighting} from top-left, styled with {p.props}",
+        f"The necklace inside an opened branded gift box, {p.lighting}, "
+        f"cozy gifting atmosphere with {p.background} and {p.props}",
+        f"Macro detail shot of the necklace pendant with {p.background} in soft bokeh, "
+        f"{p.lighting}, showcasing craftsmanship and finish",
+    ]
+
+
+def build_style_hint(p: Palette) -> str:
+    return (
+        f"professional jewelry photography, {p.anchor}, high quality, sharp focus, "
+        f"authentic real-world photograph with natural imperfections and genuine skin "
+        f"texture, soft natural light falloff, NOT an over-smoothed plastic CGI render, "
+        f"no waxy skin, no artificial glossy over-processing, "
+        f"product is small and delicate — do NOT exaggerate its size, realistic dainty "
+        f"jewelry proportions matching the reference photo."
+    )
 
 
 # ── Data ────────────────────────────────────────────────────────────────────
@@ -232,11 +256,15 @@ async def generate_jewelry_set(
     reference_image: Image.Image,
     output_dir: str | Path,
     include_charts: bool = False,
+    palette: str | None = None,
 ) -> JewelryImageSet:
     """Produce the 6 AI photos (3 mannequin + 3 concept) for ``product``.
 
     Mannequin + concept shots are returned in-memory (the caller decides
     how to name and persist them alongside DB rows).
+
+    ``palette`` selects the shared colour scheme (see ``PALETTES``); unknown or
+    ``None`` values fall back to ``DEFAULT_PALETTE``.
 
     Charts (size / birthstone / care) are only generated when
     ``include_charts=True``; by default they are skipped so the set is the
@@ -247,11 +275,16 @@ async def generate_jewelry_set(
     output_dir = Path(output_dir)
     generator = ImageWorkflowFactory.get(workflow, settings)
 
+    pal = resolve_palette(palette)
+    mannequin_prompts = build_mannequin_prompts(pal)
+    concept_prompts = build_concept_prompts(pal)
+    style_hint = build_style_hint(pal)
+
     def _request(prompt: str) -> ImageGenerationRequest:
         return ImageGenerationRequest(
             reference_image=reference_image,
             prompt=prompt,
-            style_hint=_STYLE_HINT,
+            style_hint=style_hint,
             num_outputs=1,
         )
 
@@ -268,7 +301,7 @@ async def generate_jewelry_set(
 
     ai_tasks = [
         asyncio.create_task(_bounded_generate(p))
-        for p in (*_MANNEQUIN_PROMPTS, *_CONCEPT_PROMPTS)
+        for p in (*mannequin_prompts, *concept_prompts)
     ]
     ai_results: list[list[ImageGenerationResult] | BaseException] = (
         await asyncio.gather(*ai_tasks, return_exceptions=True)
@@ -342,4 +375,12 @@ __all__ = [
     "JewelryImageSet",
     "ChartResult",
     "generate_jewelry_set",
+    "Palette",
+    "PALETTES",
+    "DEFAULT_PALETTE",
+    "resolve_palette",
+    "palette_choices",
+    "build_mannequin_prompts",
+    "build_concept_prompts",
+    "build_style_hint",
 ]

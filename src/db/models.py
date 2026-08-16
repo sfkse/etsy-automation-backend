@@ -113,10 +113,14 @@ class Product(Base):
     published_at = Column(DateTime)
 
     # Operational Integration (v2.5) — Listing Builder additive columns
-    variation_preset_id = Column(Integer, ForeignKey("variation_presets.id"), nullable=True)
-    personalization_template_id = Column(Integer, ForeignKey("personalization_templates.id"), nullable=True)
+    variation_preset_id = Column(
+        Integer, ForeignKey("variation_presets.id"), nullable=True
+    )
+    personalization_template_id = Column(
+        Integer, ForeignKey("personalization_templates.id"), nullable=True
+    )
     target_keyword = Column(String(100), nullable=True)
-    material_type = Column(String(30), nullable=True)   # MaterialType enum value
+    material_type = Column(String(30), nullable=True)  # MaterialType enum value
     stone_shape = Column(String(50), nullable=True)
     holiday_override = Column(String(50), nullable=True)
     is_featured = Column(Boolean, default=False)
@@ -125,19 +129,33 @@ class Product(Base):
     recipients_json = Column(JSONB, nullable=True)
     occasions_json = Column(JSONB, nullable=True)
     rexven_url = Column(String(500), nullable=True)
-    rexven_sku = Column(String(50), nullable=True, index=True)   # Supplier-side SKU (e.g. "REX-1664")
+    rexven_sku = Column(
+        String(50), nullable=True, index=True
+    )  # Supplier-side SKU (e.g. "REX-1664")
     original_image_path = Column(String(500), nullable=True)
-    cost_cents = Column(Integer, nullable=True)                  # Landed cost (product + shipping) when use_landed_cost was true
-    supplier_product_cents = Column(Integer, nullable=True)      # Rexven Premium "Product Price" in cents
-    supplier_shipping_cents = Column(Integer, nullable=True)     # Rexven Premium "Shipping Price" in cents
-    supplier_total_cents = Column(Integer, nullable=True)        # Rexven Premium "Total Price" in cents
-    selected_keyword_score_id = Column(Integer, nullable=True)   # Phase 4 sourcing: KeywordScore chosen to ground content generation
+    cost_cents = Column(
+        Integer, nullable=True
+    )  # Landed cost (product + shipping) when use_landed_cost was true
+    supplier_product_cents = Column(
+        Integer, nullable=True
+    )  # Rexven Premium "Product Price" in cents
+    supplier_shipping_cents = Column(
+        Integer, nullable=True
+    )  # Rexven Premium "Shipping Price" in cents
+    supplier_total_cents = Column(
+        Integer, nullable=True
+    )  # Rexven Premium "Total Price" in cents
+    selected_keyword_score_id = Column(
+        Integer, nullable=True
+    )  # Phase 4 sourcing: KeywordScore chosen to ground content generation
 
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
     approval_overrides = relationship("ApprovalOverride", back_populates="product")
     renew_logs = relationship("RenewLog", back_populates="product")
-    variation_rows = relationship("VariationRow", back_populates="product", cascade="all, delete-orphan")
+    variation_rows = relationship(
+        "VariationRow", back_populates="product", cascade="all, delete-orphan"
+    )
 
     @property
     def is_multi_published(self) -> bool:
@@ -162,6 +180,10 @@ class ProductImage(Base):
     # last regenerate — persisted so the images page can pre-fill it for iteration.
     regen_instructions = Column(Text, nullable=True)
 
+    # Colour palette used on the last (re)generation of this slot — persisted so
+    # the images page can pre-fill the per-image palette override.
+    palette_used = Column(String(40), nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product", back_populates="images")
@@ -174,9 +196,9 @@ class ApprovalOverride(Base):
 
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    field_name = Column(String(50), nullable=False)   # "title" | "tags" | "description"
-    violation = Column(Text, nullable=False)          # the rule that was violated
-    overridden_value = Column(Text)                   # the value user forced through
+    field_name = Column(String(50), nullable=False)  # "title" | "tags" | "description"
+    violation = Column(Text, nullable=False)  # the rule that was violated
+    overridden_value = Column(Text)  # the value user forced through
     created_at = Column(DateTime, default=datetime.utcnow)
 
     product = relationship("Product", back_populates="approval_overrides")
@@ -199,7 +221,7 @@ class CopyPasteProgress(Base):
 
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
-    variant_id = Column(String(10), nullable=False)   # "A" | "B" | "C" | "HYBRID"
+    variant_id = Column(String(10), nullable=False)  # "A" | "B" | "C" | "HYBRID"
     field = Column(String(20), nullable=False)
     checked_at = Column(DateTime, default=datetime.utcnow)
 
@@ -310,7 +332,7 @@ class CompetitorListing(Base):
     personalization_required = Column(Boolean, default=False)
 
     # Enrichment fields for LLM (extension v1.1+)
-    tags = Column(JSONB)         # list of strings — actual 13 seller tags via EHunt panel
+    tags = Column(JSONB)  # list of strings — actual 13 seller tags via EHunt panel
     tag_volumes = Column(JSONB)  # {tag: search_volume_int} from EHunt
     description_text = Column(Text)
     description_length = Column(Integer)
@@ -334,7 +356,9 @@ class CompetitorListing(Base):
 
     # Phase 4: Sourcing Intelligence — mini-Phase-1 scrape tagging
     scraped_for_sourcing = Column(Boolean, default=False, index=True)
-    sourcing_analysis_id = Column(Integer, ForeignKey("sourcing_analyses.id"), nullable=True)
+    sourcing_analysis_id = Column(
+        Integer, ForeignKey("sourcing_analyses.id"), nullable=True
+    )
 
     # Phase 4: CLIP embedding (stored as JSON float list; migrate to pgvector later)
     image_embedding = Column(JSONB, nullable=True)
@@ -363,8 +387,10 @@ class KeywordResearch(Base):
     top_tags_by_frequency = Column(JSONB)
     common_cliches = Column(JSONB)
     underused_keywords = Column(JSONB)
-    volume_stratified_tags = Column(JSONB)   # {"mainstream":[...], "medium":[...], "niche":[...]}
-    avg_volume_by_position = Column(JSONB)   # list of 13 ints
+    volume_stratified_tags = Column(
+        JSONB
+    )  # {"mainstream":[...], "medium":[...], "niche":[...]}
+    avg_volume_by_position = Column(JSONB)  # list of 13 ints
 
     last_analyzed_at = Column(DateTime)
 
@@ -432,8 +458,12 @@ class SourcingAnalysis(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
 
-    candidates = relationship("KeywordCandidate", back_populates="analysis", cascade="all, delete-orphan")
-    scores = relationship("KeywordScore", back_populates="analysis", cascade="all, delete-orphan")
+    candidates = relationship(
+        "KeywordCandidate", back_populates="analysis", cascade="all, delete-orphan"
+    )
+    scores = relationship(
+        "KeywordScore", back_populates="analysis", cascade="all, delete-orphan"
+    )
 
 
 class KeywordCandidate(Base):
@@ -445,7 +475,7 @@ class KeywordCandidate(Base):
     analysis_id = Column(Integer, ForeignKey("sourcing_analyses.id"), nullable=False)
 
     keyword = Column(String(100), nullable=False, index=True)
-    tier = Column(String(10), nullable=False)   # "niche" / "medium" / "broad"
+    tier = Column(String(10), nullable=False)  # "niche" / "medium" / "broad"
 
     rationale = Column(Text, nullable=True)
     detected_attributes = Column(JSONB, nullable=True)
@@ -561,15 +591,27 @@ class ShopSettings(Base):
     omit_karat_in_title = Column(Boolean, default=True)
 
     # Carrier pillars active for this shop
-    active_pillars = Column(JSONB, default=lambda: [
-        "cross", "name", "birthstone", "birth_flower", "pet", "pendant"
-    ])
+    active_pillars = Column(
+        JSONB,
+        default=lambda: [
+            "cross",
+            "name",
+            "birthstone",
+            "birth_flower",
+            "pet",
+            "pendant",
+        ],
+    )
 
     # Default shipping profile (referenced by Etsy payload builder)
     default_shipping_profile_id = Column(String(50), nullable=True)
 
     # Image workflow mode: "jewelry_9" (3 mannequin + 3 concept + 3 chart) or "legacy" (5 lifestyle)
     image_workflow_mode = Column(String(20), default="jewelry_9")
+
+    # Default colour palette applied to generated photos (see jewelry_set.PALETTES).
+    # Per-image regeneration can override this; unknown values fall back to DEFAULT_PALETTE.
+    image_palette = Column(String(40), default="soft_blush_neutral")
 
     # Auto-create a ShopSection the first time a listing is built for a new pillar (PR 6)
     auto_create_sections = Column(Boolean, default=True)
@@ -583,7 +625,7 @@ class DescriptionTemplate(Base):
     __tablename__ = "description_templates"
 
     id = Column(Integer, primary_key=True)
-    category = Column(String(20), nullable=False, unique=True)   # JewelryCategory value
+    category = Column(String(20), nullable=False, unique=True)  # JewelryCategory value
 
     section_intro = Column(Text, nullable=True)
     section_how_to_order = Column(Text, nullable=True)
@@ -608,7 +650,7 @@ class DefaultAttributes(Base):
     __tablename__ = "default_attributes"
 
     id = Column(Integer, primary_key=True)
-    category = Column(String(20), nullable=False, unique=True)   # JewelryCategory value
+    category = Column(String(20), nullable=False, unique=True)  # JewelryCategory value
 
     style = Column(String(50), default="Minimalist")
     theme = Column(String(50), default="Love & Friendship")
@@ -621,9 +663,9 @@ class DefaultAttributes(Base):
 
     default_occasion = Column(String(50), default="Birthday")
 
-    default_recipients = Column(JSONB, default=lambda: [
-        "Her", "Mother", "Wife", "Daughter", "Sister"
-    ])
+    default_recipients = Column(
+        JSONB, default=lambda: ["Her", "Mother", "Wife", "Daughter", "Sister"]
+    )
 
 
 class VariationPreset(Base):
@@ -634,8 +676,8 @@ class VariationPreset(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(60), nullable=False, unique=True)
 
-    category = Column(String(20), nullable=False)          # JewelryCategory
-    material_type = Column(String(30), nullable=False)     # MaterialType
+    category = Column(String(20), nullable=False)  # JewelryCategory
+    material_type = Column(String(30), nullable=False)  # MaterialType
 
     finishes = Column(JSONB, nullable=False)
     lengths_inches = Column(JSONB, nullable=True)
@@ -655,9 +697,9 @@ class PricingStrategy(Base):
 
     base_multiplier = Column(Float, default=4.0)
 
-    finish_offsets_pct = Column(JSONB, default=lambda: {
-        "Gold": 0.0, "Silver": -3.0, "Rose": -5.0
-    })
+    finish_offsets_pct = Column(
+        JSONB, default=lambda: {"Gold": 0.0, "Silver": -3.0, "Rose": -5.0}
+    )
 
     length_base_inches = Column(Integer, default=16)
     length_price_per_extra_inch_pct = Column(Float, default=2.5)

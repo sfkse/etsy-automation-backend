@@ -14,7 +14,7 @@ from PIL import Image
 
 from src.db.models import PersonalizationTemplate, Product, VariationPreset
 from src.modules.images.base import ImageGenerationResult
-from src.modules.images.jewelry_set import generate_jewelry_set
+from src.modules.images.jewelry_set import PALETTES, generate_jewelry_set
 
 
 def _fake_ai_result() -> ImageGenerationResult:
@@ -133,3 +133,67 @@ async def test_skips_birthstone_chart_when_not_warranted(tmp_path):
     assert result.birthstone_chart is None
     assert result.size_chart is not None
     assert result.care_instructions_chart is not None
+
+
+@pytest.mark.asyncio
+async def test_selected_palette_flows_into_prompts_and_style_hint(tmp_path):
+    """A chosen palette's background/anchor text must appear in the AI requests."""
+    product = _make_product()
+    session = _session_returning()
+
+    captured = []
+
+    async def capture_generate(request):
+        captured.append(request)
+        return [_fake_ai_result()]
+
+    gen = MagicMock()
+    gen.generate = AsyncMock(side_effect=capture_generate)
+
+    palette_key = "warm_earthy_stone"
+    pal = PALETTES[palette_key]
+
+    with patch(
+        "src.modules.images.jewelry_set.ImageWorkflowFactory.get",
+        return_value=gen,
+    ):
+        await generate_jewelry_set(
+            product=product,
+            workflow="gemini",
+            session=session,
+            settings=MagicMock(),
+            reference_image=Image.new("RGBA", (256, 256), (255, 255, 255, 255)),
+            output_dir=tmp_path,
+            palette=palette_key,
+        )
+
+    assert len(captured) == 6
+    all_prompts = " ".join(r.prompt for r in captured)
+    assert pal.background in all_prompts
+    assert pal.lighting in all_prompts
+    # style_hint carries the palette anchor on every request.
+    assert all(pal.anchor in r.style_hint for r in captured)
+
+
+@pytest.mark.asyncio
+async def test_unknown_palette_falls_back_to_default(tmp_path):
+    """An unknown palette key must not raise — it resolves to the default."""
+    product = _make_product()
+    session = _session_returning()
+
+    with patch(
+        "src.modules.images.jewelry_set.ImageWorkflowFactory.get",
+        return_value=_mock_generator([]),
+    ):
+        result = await generate_jewelry_set(
+            product=product,
+            workflow="gemini",
+            session=session,
+            settings=MagicMock(),
+            reference_image=Image.new("RGBA", (256, 256), (255, 255, 255, 255)),
+            output_dir=tmp_path,
+            palette="does-not-exist",
+        )
+
+    assert len(result.mannequin_shots) == 3
+    assert len(result.concept_shots) == 3

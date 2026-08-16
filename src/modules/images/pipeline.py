@@ -28,6 +28,7 @@ from src.modules.images.base import ImageGenerationRequest, ImageGenerationResul
 from src.modules.images.cover_crop import auto_crop_cover_photo
 from src.modules.images.factory import ImageWorkflowFactory
 from src.modules.images.jewelry_set import (
+    DEFAULT_PALETTE,
     ChartResult,
     JewelryImageSet,
     generate_jewelry_set,
@@ -127,6 +128,7 @@ async def run_image_pipeline(
 
     shop_settings = session.query(ShopSettings).filter_by(id=1).first()
     mode = getattr(shop_settings, "image_workflow_mode", None) or "jewelry_9"
+    palette = getattr(shop_settings, "image_palette", None) or DEFAULT_PALETTE
 
     if mode == "jewelry_9":
         await _run_jewelry_9_pipeline(
@@ -136,6 +138,7 @@ async def run_image_pipeline(
             workflow_name=workflow_name,
             preprocessed_path=preprocessed_path,
             real_images=real_images,
+            palette=palette,
         )
         product.status = ProductStatus.AWAITING_APPROVAL.value
         session.commit()
@@ -250,6 +253,7 @@ async def _run_jewelry_9_pipeline(
     workflow_name: str,
     preprocessed_path,
     real_images: list[ProductImage],
+    palette: str | None = None,
 ) -> None:
     """The 9-image jewelry set pipeline (PR 4).
 
@@ -272,6 +276,7 @@ async def _run_jewelry_9_pipeline(
         settings=settings,
         reference_image=reference_image,
         output_dir=ai_dir,
+        palette=palette,
     )
 
     next_rank = 1
@@ -304,6 +309,7 @@ async def _run_jewelry_9_pipeline(
         db_image.file_path = str(path)
         db_image.rank = next_rank
         db_image.workflow_source = workflow_name
+        db_image.palette_used = palette
         db_image.is_selected = is_cover
         session.flush()
         db_image.alt_text = generate_alt_text(product, db_image)

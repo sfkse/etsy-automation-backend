@@ -38,6 +38,11 @@
       <div class="card-footer bg-white border-top">
         <textarea class="form-control form-control-sm slot-instructions mb-2" rows="2"
                   placeholder="Extra instructions (e.g. warmer lighting, model looking left)">{{ s.instructions }}</textarea>
+        <select class="form-select form-select-sm slot-palette mb-2" title="Colour palette for this slot">
+          {% for key, name in palettes %}
+          <option value="{{ key }}" {% if key == s.palette %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
         <div class="input-group input-group-sm mb-2">
           <select class="form-select slot-workflow">
             {% for wf in workflows %}
@@ -52,6 +57,35 @@
         <div class="slot-candidates mt-2 d-none">
           <div class="small text-muted mb-1">Pick one to keep:</div>
           <div class="row g-2 candidate-row"></div>
+        </div>
+        <div class="slot-error small text-danger mt-2 d-none"></div>
+
+        <hr class="my-2">
+        <div class="slot-video-section">
+          <div class="d-flex align-items-center justify-content-between mb-1">
+            <span class="small fw-semibold">Video clip</span>
+            <div class="spinner-border spinner-border-sm text-primary slot-video-spinner d-none" role="status"></div>
+          </div>
+          <video controls playsinline
+                 class="w-100 rounded border mb-2 slot-video {% if not s.video_url %}d-none{% endif %}"
+                 style="aspect-ratio:1; object-fit:cover; background:#000;"
+                 {% if s.video_url %}src="{{ s.video_url }}"{% endif %}></video>
+          <textarea class="form-control form-control-sm video-prompt mb-2" rows="2"
+                    placeholder="Motion / animation prompt">{{ default_motion_prompt }}</textarea>
+          <div class="input-group input-group-sm mb-1">
+            <select class="form-select video-model" title="Video model">
+              {% for m in video_models %}
+              <option value="{{ m }}">
+                {%- if m == "dop" %}DoP · 5s (best quality)
+                {%- elif m == "kling" %}Kling · 5s/10s
+                {%- else %}{{ m }}{% endif -%}
+              </option>
+              {% endfor %}
+            </select>
+            <select class="form-select video-duration" title="Clip length" style="max-width:6rem;"></select>
+          </div>
+          <button class="btn btn-sm btn-outline-primary w-100 btn-generate-video" type="button">Generate video</button>
+          <div class="video-error small text-danger mt-1 d-none"></div>
         </div>
       </div>
     </div>
@@ -77,11 +111,68 @@ function setBusy(card, busy) {
   card.querySelectorAll("button, select").forEach(el => el.disabled = busy);
 }
 function setImage(card, url) {
+  if (!url) return;
   const img = card.querySelector(".slot-img");
   const ph = card.querySelector(".slot-img-placeholder");
   img.src = url;
   img.classList.remove("d-none");
   if (ph) ph.classList.add("d-none");
+}
+function setError(card, msg) {
+  const el = card.querySelector(".slot-error");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("d-none", !msg);
+}
+
+// ── Regeneration progress via server-side polling ────────────────────────────
+// Regenerate is a background task on the server, so its progress must be tracked
+// there (not in this page's JS) — that way a spinner is restored after the user
+// navigates away and back, and the finished photo swaps in on the next poll.
+const wasRunning = {};   // slot -> bool (previous tick), to act only on transitions
+let poller = null;
+
+function applyStatus(data) {
+  const slots = data.slots || {};
+  for (const slot in slots) {
+    const card = cardFor(slot);
+    if (!card) continue;
+    const st = slots[slot];
+    const prev = wasRunning[slot];
+    if (st.running && !prev) {
+      // (re)entered the running state — show the spinner, lock the controls.
+      setBusy(card, true);
+      setError(card, "");
+    } else if (!st.running && prev) {
+      // just finished — reveal the new photo and unlock.
+      setBusy(card, false);
+      setImage(card, st.url);
+      if (st.workflow) card.querySelector(".slot-backend").textContent = st.workflow;
+      setError(card, st.error ? ("Regenerate failed: " + st.error) : "");
+    }
+    // slots that didn't transition are left untouched so we never clobber a
+    // Compare operation's own busy state.
+    wasRunning[slot] = st.running;
+  }
+}
+
+async function pollStatus() {
+  let data;
+  try {
+    const res = await fetch(`/products/${SKU}/images/status`);
+    data = await res.json();
+  } catch (e) { return; }
+  applyStatus(data);
+  if (data.any_running) {
+    ensurePoller();
+  } else if (poller) {
+    clearInterval(poller);
+    poller = null;
+  }
+}
+
+function ensurePoller() {
+  if (!poller) poller = setInterval(pollStatus, 2000);
 }
 
 document.querySelectorAll(".btn-regenerate").forEach(btn => {
@@ -90,13 +181,15 @@ document.querySelectorAll(".btn-regenerate").forEach(btn => {
     const slot = card.dataset.slot;
     const workflow = card.querySelector(".slot-workflow").value;
     const instructions = card.querySelector(".slot-instructions").value;
+    const palette = card.querySelector(".slot-palette").value;
+    setError(card, "");
     setBusy(card, true);
-    try {
-      const r = await postForm(`/products/${SKU}/images/regenerate`, { slot, workflow, instructions });
-      if (r.error) { alert("Regenerate failed: " + r.error); return; }
-      setImage(card, r.cache_url || r.url);
-      card.querySelector(".slot-backend").textContent = workflow;
-    } finally { setBusy(card, false); }
+    const r = await postForm(`/products/${SKU}/images/regenerate`, { slot, workflow, instructions, palette });
+    if (r.error) { setBusy(card, false); setError(card, "Regenerate failed: " + r.error); return; }
+    // Server has marked the slot running; drive the rest from the poller so the
+    // progress survives navigation.
+    wasRunning[slot] = true;
+    ensurePoller();
   });
 });
 
@@ -107,11 +200,12 @@ document.querySelectorAll(".btn-compare").forEach(btn => {
     const box = card.querySelector(".slot-candidates");
     const row = card.querySelector(".candidate-row");
     const instructions = card.querySelector(".slot-instructions").value;
+    const palette = card.querySelector(".slot-palette").value;
     setBusy(card, true);
     box.classList.remove("d-none");
     row.innerHTML = '<div class="text-muted small">Generating with all backends…</div>';
     try {
-      const r = await postForm(`/products/${SKU}/images/compare`, { slot, instructions });
+      const r = await postForm(`/products/${SKU}/images/compare`, { slot, instructions, palette });
       if (r.error) { row.innerHTML = '<div class="text-danger small">' + r.error + '</div>'; return; }
       row.innerHTML = "";
       r.candidates.forEach(c => {
@@ -135,7 +229,7 @@ document.querySelectorAll(".btn-compare").forEach(btn => {
           const workflow = ub.dataset.wf;
           setBusy(card, true);
           try {
-            const sel = await postForm(`/products/${SKU}/images/select`, { slot, workflow, instructions });
+            const sel = await postForm(`/products/${SKU}/images/select`, { slot, workflow, instructions, palette });
             if (sel.error) { alert("Select failed: " + sel.error); return; }
             setImage(card, sel.cache_url || sel.url);
             card.querySelector(".slot-backend").textContent = workflow;
@@ -147,5 +241,127 @@ document.querySelectorAll(".btn-compare").forEach(btn => {
     } finally { setBusy(card, false); }
   });
 });
+
+// ── Video clip generation (separate poller from image regeneration) ──────────
+// Uses its own poller / running map so it never clashes with the image spinner
+// or the Compare busy state — image and video work run independently per slot.
+const videoWasRunning = {};   // slot -> bool (previous tick)
+let videoPoller = null;
+
+// model name -> list of allowed durations (empty list = fixed-length model)
+const VIDEO_DURATIONS = {{ video_duration_options | tojson }};
+
+function videoModelHasDurations(card) {
+  return (VIDEO_DURATIONS[card.querySelector(".video-model").value] || []).length > 0;
+}
+// Rebuild the duration <select> to match the chosen model: fixed-length models
+// (DoP) show a disabled "Fixed 5s"; models with options (Kling) list them.
+function updateDurationOptions(card) {
+  const model = card.querySelector(".video-model").value;
+  const dur = card.querySelector(".video-duration");
+  const opts = VIDEO_DURATIONS[model] || [];
+  dur.innerHTML = "";
+  if (opts.length === 0) {
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "Fixed 5s";
+    dur.appendChild(o);
+    dur.disabled = true;
+  } else {
+    opts.forEach(s => {
+      const o = document.createElement("option");
+      o.value = String(s); o.textContent = s + "s";
+      dur.appendChild(o);
+    });
+    dur.disabled = false;
+  }
+}
+
+function setVideoBusy(card, busy) {
+  card.querySelector(".slot-video-spinner").classList.toggle("d-none", !busy);
+  card.querySelectorAll(".btn-generate-video, .video-prompt, .video-model")
+      .forEach(el => el.disabled = busy);
+  // Duration is disabled while busy, and otherwise only when the model is fixed-length.
+  card.querySelector(".video-duration").disabled = busy || !videoModelHasDurations(card);
+}
+function setVideoError(card, msg) {
+  const el = card.querySelector(".video-error");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("d-none", !msg);
+}
+function setVideo(card, url) {
+  if (!url) return;
+  const v = card.querySelector(".slot-video");
+  v.src = url;
+  v.classList.remove("d-none");
+}
+
+function applyVideoStatus(data) {
+  const slots = data.slots || {};
+  for (const slot in slots) {
+    const card = cardFor(slot);
+    if (!card) continue;
+    const st = slots[slot];
+    const prev = videoWasRunning[slot];
+    if (st.running && !prev) {
+      setVideoBusy(card, true);
+      setVideoError(card, "");
+    } else if (!st.running && prev) {
+      setVideoBusy(card, false);
+      setVideo(card, st.url);
+      setVideoError(card, st.error ? ("Video failed: " + st.error) : "");
+    }
+    videoWasRunning[slot] = st.running;
+  }
+}
+
+async function pollVideoStatus() {
+  let data;
+  try {
+    const res = await fetch(`/products/${SKU}/images/video/status`);
+    data = await res.json();
+  } catch (e) { return; }
+  applyVideoStatus(data);
+  if (data.any_running) {
+    ensureVideoPoller();
+  } else if (videoPoller) {
+    clearInterval(videoPoller);
+    videoPoller = null;
+  }
+}
+function ensureVideoPoller() {
+  // Clips take longer than photos, so poll a little less often.
+  if (!videoPoller) videoPoller = setInterval(pollVideoStatus, 3000);
+}
+
+// Populate each card's duration options and keep them in sync with the model.
+document.querySelectorAll("[data-slot] .video-model").forEach(sel => {
+  const card = sel.closest("[data-slot]");
+  updateDurationOptions(card);
+  sel.addEventListener("change", () => updateDurationOptions(card));
+});
+
+document.querySelectorAll(".btn-generate-video").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const card = btn.closest("[data-slot]");
+    const slot = card.dataset.slot;
+    const prompt = card.querySelector(".video-prompt").value;
+    const model = card.querySelector(".video-model").value;
+    const duration = card.querySelector(".video-duration").value;
+    setVideoError(card, "");
+    setVideoBusy(card, true);
+    const r = await postForm(`/products/${SKU}/images/video`, { slot, prompt, duration, model });
+    if (r.error) { setVideoBusy(card, false); setVideoError(card, "Video failed: " + r.error); return; }
+    // Server marked the slot running; drive the rest from the poller so progress
+    // survives navigation.
+    videoWasRunning[slot] = true;
+    ensureVideoPoller();
+  });
+});
+
+// On load, restore spinners for any slot already regenerating (e.g. one started
+// before navigating away); pollStatus() keeps polling only while work is running.
+pollStatus();
+pollVideoStatus();
 </script>
 {% endblock %}

@@ -27,9 +27,11 @@ from src.modules.images.alt_text import generate_alt_text
 from src.modules.images.base import ImageGenerationRequest
 from src.modules.images.factory import ImageWorkflowFactory
 from src.modules.images.jewelry_set import (
-    _CONCEPT_PROMPTS,
-    _MANNEQUIN_PROMPTS,
-    _STYLE_HINT,
+    Palette,
+    build_concept_prompts,
+    build_mannequin_prompts,
+    build_style_hint,
+    resolve_palette,
 )
 from src.modules.images.pipeline import _save_ai_shot
 from src.modules.images.preprocessing import preprocess_and_save
@@ -39,22 +41,28 @@ logger = get_logger(__name__)
 
 
 # ── Slot registry ────────────────────────────────────────────────────────────
-# slot -> (prompt, rank, is_cover). Rank/cover mirror the jewelry_9 pipeline:
-# mannequin 1..3 = rank 1..3 (mannequin-1 is the cover), concept 1..3 = rank 4..6.
-def _build_slots() -> dict[str, tuple[str, int, bool]]:
+# Slot identity is palette-independent (a stable list of 6 slots); only the
+# prompt *text* varies with the chosen palette. Rank/cover mirror the jewelry_9
+# pipeline: mannequin-1..3 = rank 1..3 (mannequin-1 is the cover),
+# concept-1..3 = rank 4..6.
+SLOT_ORDER: list[str] = [
+    "mannequin-1", "mannequin-2", "mannequin-3",
+    "concept-1", "concept-2", "concept-3",
+]
+
+
+def build_slots(p: Palette) -> dict[str, tuple[str, int, bool]]:
+    """slot -> (prompt, rank, is_cover) for the given palette."""
     slots: dict[str, tuple[str, int, bool]] = {}
-    for i, prompt in enumerate(_MANNEQUIN_PROMPTS, start=1):
+    for i, prompt in enumerate(build_mannequin_prompts(p), start=1):
         slots[f"mannequin-{i}"] = (prompt, i, i == 1)
-    for i, prompt in enumerate(_CONCEPT_PROMPTS, start=1):
+    for i, prompt in enumerate(build_concept_prompts(p), start=1):
         slots[f"concept-{i}"] = (prompt, 3 + i, False)
     return slots
 
 
-SLOTS: dict[str, tuple[str, int, bool]] = _build_slots()
-
-
 def valid_slot(slot: str) -> bool:
-    return slot in SLOTS
+    return slot in SLOT_ORDER
 
 
 @dataclass
@@ -106,11 +114,11 @@ def _to_url(settings: Settings, path: Path | str) -> str:
     return "/images/" + rel.lstrip("/")
 
 
-def _request(reference: Image.Image, prompt: str) -> ImageGenerationRequest:
+def _request(reference: Image.Image, prompt: str, style_hint: str) -> ImageGenerationRequest:
     return ImageGenerationRequest(
         reference_image=reference,
         prompt=prompt,
-        style_hint=_STYLE_HINT,
+        style_hint=style_hint,
         num_outputs=1,
     )
 
@@ -133,22 +141,29 @@ async def regenerate_slot(
     slot: str,
     workflow: str,
     instructions: str | None = None,
+    palette: str | None = None,
 ) -> ProductImage:
     """Regenerate ``slot`` with ``workflow`` and overwrite that photo in place.
 
     Updates the existing ProductImage row (or creates it if missing), keeping
     the slot's canonical rank / cover status. ``instructions`` (optional) are
     appended to the slot's built-in prompt as extra art direction and persisted
-    on the row so the page can pre-fill them. Returns the persisted row.
+    on the row so the page can pre-fill them. ``palette`` (optional) overrides
+    the colour scheme for this slot and is likewise persisted. Returns the
+    persisted row.
     """
     if not valid_slot(slot):
-        raise ValueError(f"Unknown slot {slot!r}. Valid: {sorted(SLOTS)}")
+        raise ValueError(f"Unknown slot {slot!r}. Valid: {SLOT_ORDER}")
 
-    prompt, rank, is_cover = SLOTS[slot]
+    pal = resolve_palette(palette)
+    style_hint = build_style_hint(pal)
+    prompt, rank, is_cover = build_slots(pal)[slot]
     reference = _reference_image(product, session, settings)
     generator = ImageWorkflowFactory.get(workflow, settings)
 
-    results = await generator.generate(_request(reference, _effective_prompt(prompt, instructions)))
+    results = await generator.generate(
+        _request(reference, _effective_prompt(prompt, instructions), style_hint)
+    )
     if not results:
         raise RuntimeError(f"{workflow} returned no image for slot {slot}")
 
@@ -173,6 +188,7 @@ async def regenerate_slot(
     row.file_path = str(path)
     row.workflow_source = workflow
     row.regen_instructions = (instructions or "").strip() or None
+    row.palette_used = (palette or "").strip() or None
     session.flush()
     row.alt_text = generate_alt_text(product, row)
     session.commit()
@@ -191,18 +207,22 @@ async def generate_slot_candidates(
     slot: str,
     workflows: list[str] | None = None,
     instructions: str | None = None,
+    palette: str | None = None,
 ) -> list[SlotCandidate]:
     """Generate ``slot`` with each backend and save as (uncommitted) candidates.
 
     Candidates land under ``ai_generated/candidates/{slot}__{workflow}.jpg`` so
     the user can compare them side by side before promoting one. ``instructions``
     (optional) are appended to the slot's built-in prompt for every candidate.
+    ``palette`` (optional) overrides the colour scheme for the candidates.
     """
     if not valid_slot(slot):
-        raise ValueError(f"Unknown slot {slot!r}. Valid: {sorted(SLOTS)}")
+        raise ValueError(f"Unknown slot {slot!r}. Valid: {SLOT_ORDER}")
 
     workflows = workflows or ImageWorkflowFactory.available_workflows()
-    prompt, _rank, is_cover = SLOTS[slot]
+    pal = resolve_palette(palette)
+    style_hint = build_style_hint(pal)
+    prompt, _rank, is_cover = build_slots(pal)[slot]
     prompt = _effective_prompt(prompt, instructions)
     reference = _reference_image(product, session, settings)
     cand_dir = _ai_dir(product, settings) / "candidates"
@@ -211,7 +231,7 @@ async def generate_slot_candidates(
         t0 = time.perf_counter()
         try:
             generator = ImageWorkflowFactory.get(workflow, settings)
-            results = await generator.generate(_request(reference, prompt))
+            results = await generator.generate(_request(reference, prompt, style_hint))
             elapsed = round(time.perf_counter() - t0, 2)
             if not results:
                 return SlotCandidate(workflow, workflow, None, False, elapsed, 0.0, "No image returned")
@@ -240,12 +260,14 @@ def select_candidate(
     slot: str,
     workflow: str,
     instructions: str | None = None,
+    palette: str | None = None,
 ) -> ProductImage:
     """Promote a previously-generated candidate to the committed slot photo."""
     if not valid_slot(slot):
-        raise ValueError(f"Unknown slot {slot!r}. Valid: {sorted(SLOTS)}")
+        raise ValueError(f"Unknown slot {slot!r}. Valid: {SLOT_ORDER}")
 
-    _prompt, rank, is_cover = SLOTS[slot]
+    # rank / cover status are palette-independent; resolve with the default.
+    _prompt, rank, is_cover = build_slots(resolve_palette(None))[slot]
     cand = _ai_dir(product, settings) / "candidates" / f"{slot}__{workflow}.jpg"
     if not cand.exists():
         raise FileNotFoundError(f"No candidate for slot {slot} / {workflow}")
@@ -274,6 +296,8 @@ def select_candidate(
     row.workflow_source = workflow
     if instructions is not None:
         row.regen_instructions = instructions.strip() or None
+    if palette is not None:
+        row.palette_used = palette.strip() or None
     session.flush()
     row.alt_text = generate_alt_text(product, row)
     session.commit()
@@ -283,7 +307,8 @@ def select_candidate(
 
 
 __all__ = [
-    "SLOTS",
+    "SLOT_ORDER",
+    "build_slots",
     "SlotCandidate",
     "valid_slot",
     "regenerate_slot",

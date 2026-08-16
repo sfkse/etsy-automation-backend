@@ -10,6 +10,7 @@ Safe to call repeatedly: each seed_* helper checks for existing rows via
 its unique key and only inserts what is missing. Never overwrites user
 edits.
 """
+
 from __future__ import annotations
 
 import structlog
@@ -36,34 +37,39 @@ _log = structlog.get_logger(__name__)
 def seed_shop_settings(session: Session) -> None:
     if session.query(ShopSettings).filter_by(id=1).first():
         return
-    session.add(ShopSettings(
-        id=1,
-        renewal_option=RenewalOption.AUTOMATIC.value,
-        return_policy_days=14,
-        feature_listing_default=False,
-        default_quantity=999,
-        omit_karat_in_title=True,
-        image_workflow_mode="jewelry_9",
-        auto_create_sections=True,
-    ))
+    session.add(
+        ShopSettings(
+            id=1,
+            renewal_option=RenewalOption.AUTOMATIC.value,
+            return_policy_days=14,
+            feature_listing_default=False,
+            default_quantity=999,
+            omit_karat_in_title=True,
+            image_workflow_mode="jewelry_9",
+            image_palette="soft_blush_neutral",
+            auto_create_sections=True,
+        )
+    )
     session.commit()
 
 
 def seed_pricing_strategy(session: Session) -> None:
     if session.query(PricingStrategy).filter_by(id=1).first():
         return
-    session.add(PricingStrategy(
-        id=1,
-        base_multiplier=4.0,
-        finish_offsets_pct={"Gold": 0.0, "Silver": -3.0, "Rose": -5.0},
-        length_base_inches=16,
-        length_price_per_extra_inch_pct=2.5,
-        loss_leader_enabled=True,
-        loss_leader_finish="Rose",
-        loss_leader_length=12,
-        loss_leader_margin_pct=15.0,
-        multi_count_extra_pct=12.0,
-    ))
+    session.add(
+        PricingStrategy(
+            id=1,
+            base_multiplier=4.0,
+            finish_offsets_pct={"Gold": 0.0, "Silver": -3.0, "Rose": -5.0},
+            length_base_inches=16,
+            length_price_per_extra_inch_pct=2.5,
+            loss_leader_enabled=True,
+            loss_leader_finish="Rose",
+            loss_leader_length=12,
+            loss_leader_margin_pct=15.0,
+            multi_count_extra_pct=12.0,
+        )
+    )
     session.commit()
 
 
@@ -82,11 +88,7 @@ _NECKLACE_TEMPLATE = {
         "2. Select your chain length: {length_options}.\n"
         "{personalization_instructions}"
     ),
-    "section_materials": (
-        "**Materials**\n"
-        "{materials_line}\n"
-        "{chain_note}"
-    ),
+    "section_materials": ("**Materials**\n" "{materials_line}\n" "{chain_note}"),
     "section_finish": (
         "**Finish**\n"
         "Available in three finishes to suit your style:\n"
@@ -119,8 +121,12 @@ _NECKLACE_TEMPLATE = {
         "Message us anytime — we usually reply within a few hours. "
         "We love working with you on a custom piece, too."
     ),
-    "brass_overrides": {"materials_line": "Premium Brass with 14K Gold/Silver/Rose Gold Plating"},
-    "silver_overrides": {"materials_line": "925 Sterling Silver with optional Gold/Rose Gold Plating"},
+    "brass_overrides": {
+        "materials_line": "Premium Brass with 14K Gold/Silver/Rose Gold Plating"
+    },
+    "silver_overrides": {
+        "materials_line": "925 Sterling Silver with optional Gold/Rose Gold Plating"
+    },
     "default_chain_text": (
         "The chain is the standard 16 inch length with a 2 inch extender, "
         "so you can wear it at 16 or 18 inches."
@@ -132,7 +138,9 @@ def _tpl(category: JewelryCategory, product_word: str, **overrides) -> dict:
     """Build a template dict per category, defaulting to the necklace scaffold."""
     tpl = dict(_NECKLACE_TEMPLATE)
     tpl["section_intro"] = tpl["section_intro"].replace("necklace", product_word)
-    tpl["section_best_gifts_for"] = tpl["section_best_gifts_for"].replace("necklace", product_word)
+    tpl["section_best_gifts_for"] = tpl["section_best_gifts_for"].replace(
+        "necklace", product_word
+    )
     tpl.update(overrides)
     tpl["category"] = category.value
     return tpl
@@ -141,23 +149,32 @@ def _tpl(category: JewelryCategory, product_word: str, **overrides) -> dict:
 def seed_description_templates(session: Session) -> None:
     seed_specs = [
         _tpl(JewelryCategory.NECKLACE, "necklace"),
-        _tpl(JewelryCategory.BRACELET, "bracelet",
-             default_chain_text="The bracelet is 7 inch with a 1 inch extender."),
-        _tpl(JewelryCategory.EARRING, "pair of earrings",
-             section_how_to_order=(
+        _tpl(
+            JewelryCategory.BRACELET,
+            "bracelet",
+            default_chain_text="The bracelet is 7 inch with a 1 inch extender.",
+        ),
+        _tpl(
+            JewelryCategory.EARRING,
+            "pair of earrings",
+            section_how_to_order=(
                 "**How to Order**\n"
                 "1. Choose your preferred finish — Gold or Silver.\n"
                 "{personalization_instructions}"
-             ),
-             default_chain_text=""),
-        _tpl(JewelryCategory.RING, "ring",
-             section_how_to_order=(
+            ),
+            default_chain_text="",
+        ),
+        _tpl(
+            JewelryCategory.RING,
+            "ring",
+            section_how_to_order=(
                 "**How to Order**\n"
                 "1. Choose your preferred finish — Gold, Silver, or Rose Gold.\n"
                 "2. Select your ring size.\n"
                 "{personalization_instructions}"
-             ),
-             default_chain_text=""),
+            ),
+            default_chain_text="",
+        ),
     ]
 
     for spec in seed_specs:
@@ -184,17 +201,21 @@ def seed_default_attributes(session: Session) -> None:
     for category in JewelryCategory:
         if session.query(DefaultAttributes).filter_by(category=category.value).first():
             continue
-        session.add(DefaultAttributes(
-            category=category.value,
-            style="Minimalist",
-            theme="Love & Friendship",
-            holiday_default="Christmas",
-            sustainability="Made with Recycled Metals",
-            chain_style="Cable Chain" if category == JewelryCategory.NECKLACE else "",
-            adjustable=True,
-            convertible=True,
-            default_occasion="Birthday",
-        ))
+        session.add(
+            DefaultAttributes(
+                category=category.value,
+                style="Minimalist",
+                theme="Love & Friendship",
+                holiday_default="Christmas",
+                sustainability="Made with Recycled Metals",
+                chain_style=(
+                    "Cable Chain" if category == JewelryCategory.NECKLACE else ""
+                ),
+                adjustable=True,
+                convertible=True,
+                default_occasion="Birthday",
+            )
+        )
     session.commit()
 
 
@@ -288,7 +309,11 @@ def seed_personalization_templates(session: Session) -> None:
             max_characters=0,
             is_optional=False,
             applicable_categories=["necklace"],
-            type_signature={"has_initial": True, "has_birthstone": True, "count_max": 3},
+            type_signature={
+                "has_initial": True,
+                "has_birthstone": True,
+                "count_max": 3,
+            },
         ),
         dict(
             name="name_only",
@@ -302,11 +327,7 @@ def seed_personalization_templates(session: Session) -> None:
         ),
         dict(
             name="name_date",
-            instruction_text=(
-                "Please Provide:\n"
-                "1. Name\n"
-                "2. Date (MM/DD/YYYY)"
-            ),
+            instruction_text=("Please Provide:\n" "1. Name\n" "2. Date (MM/DD/YYYY)"),
             example_text="For example: Sarah, 05/12/2024",
             reference_note="",
             max_characters=20,
@@ -358,12 +379,14 @@ def seed_universal_keywords(session: Session) -> None:
     for kw, cat in universals:
         if session.query(KeywordPool).filter_by(keyword=kw).first():
             continue
-        session.add(KeywordPool(
-            keyword=kw,
-            category=cat,
-            carrier_pillar=None,
-            is_universal=True,
-        ))
+        session.add(
+            KeywordPool(
+                keyword=kw,
+                category=cat,
+                carrier_pillar=None,
+                is_universal=True,
+            )
+        )
         inserted += 1
     session.commit()
 
