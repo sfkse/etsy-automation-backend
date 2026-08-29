@@ -119,7 +119,11 @@ async def run_image_pipeline(
         raise ValueError(f"No real images found for product {sku}")
 
     primary_path = real_images[0].file_path
-    preprocessed_path = preprocess_and_save(
+    # Off the event loop: rembg inference is seconds of blocking CPU work (plus a
+    # one-time model load), and running it inline froze uvicorn hard enough that
+    # the compose healthcheck stopped getting answered mid-build.
+    preprocessed_path = await asyncio.to_thread(
+        preprocess_and_save,
         image_path=primary_path,
         sku=sku,
         images_dir=settings.IMAGES_DIR,
