@@ -51,7 +51,7 @@ ADDITIONAL CONTEXT (use to refine keyword choices):
 - Supplier category: {category}
 - Supplier cost: ${cost_usd}
 - Premium pricing tier: ${premium_cost_usd}
-- Supplier flagged this as a "Satışa Uygun" (sales-suitable) item: {satisa_uygun}
+- Supplier material: {material}
 
 Return ONLY valid JSON in this exact shape (no markdown, no preamble):
 {{
@@ -114,12 +114,20 @@ class VisionKeywordSuggester:
         try:
             image_data, media_type = self._encode_image(analysis.image_path)
 
+            # The "Satışa Uygun" badge used to be passed here. It means "open for
+            # sale in Türkiye" — a domestic-market flag steering a prediction
+            # about American buyers. It was also never populated (the extension
+            # didn't send it), so the line rendered "no" for every product.
+            # Replaced with the supplier's stated material, which a vision model
+            # genuinely cannot infer: 925 silver, brass and gold-plated brass all
+            # photograph identically.
+            attributes = analysis.rexven_attributes or {}
             prompt = VISION_KEYWORD_PROMPT.format(
                 title=analysis.rexven_title_en or analysis.rexven_title_tr or "(not provided)",
                 category=analysis.rexven_category or "jewelry",
                 cost_usd=f"{(analysis.rexven_cost_usd_cents or 0) / 100:.2f}",
                 premium_cost_usd=f"{(analysis.rexven_premium_cost_usd_cents or 0) / 100:.2f}",
-                satisa_uygun="yes" if analysis.rexven_has_satisa_uygun_badge else "no",
+                material=attributes.get("material_raw") or "(not provided)",
             )
 
             response = self._client.messages.create(

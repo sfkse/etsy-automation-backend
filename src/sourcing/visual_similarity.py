@@ -38,6 +38,14 @@ class VisualSimilaritySearch:
         """
         Return [(listing, similarity_score), ...] sorted descending.
         Filters out listings below min_similarity threshold.
+
+        ``top_k`` counts *distinct listings*, not rows. A listing has one row per
+        keyword it was scraped for and all its rows share one image (hence one
+        embedding), so a plain row-wise cut would let a handful of images fill
+        the whole window — starving ``predict_rank`` of keyword-specific support
+        and skewing ``extract_keyword_distribution``'s per-keyword counts. Every
+        row of an admitted listing is returned, since it is the keyword attached
+        to each row that both consumers actually read.
         """
         rexven_emb = self._get_or_compute_rexven_embedding(rexven_image_path)
 
@@ -69,13 +77,26 @@ class VisualSimilaritySearch:
         ]
         scored.sort(key=lambda x: x[1], reverse=True)
 
+        # Admit rows until top_k *distinct listings* have been taken; sibling
+        # rows of an admitted listing ride along free.
+        admitted: set[str] = set()
+        result: list[tuple[CompetitorListing, float]] = []
+        for listing, sim in scored:
+            if listing.listing_id not in admitted:
+                if len(admitted) >= top_k:
+                    continue
+                admitted.add(listing.listing_id)
+            result.append((listing, sim))
+
         _log.info(
             "visual_similarity_complete",
             candidates=len(valid),
             above_threshold=len(scored),
             top_k=top_k,
+            distinct_listings=len(admitted),
+            rows_returned=len(result),
         )
-        return scored[:top_k]
+        return result
 
     def embed_product(self, image_path: str) -> np.ndarray:
         """Return the (cached) CLIP embedding for the product image."""

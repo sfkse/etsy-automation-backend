@@ -23,8 +23,13 @@ def _make_title(length: int, filler: str = "X") -> str:
 
 
 def _valid_tags(count: int = 13) -> list[str]:
-    """Return *count* unique tags each within 20 chars."""
-    return [f"tag{i:02d}" for i in range(count)]
+    """Return *count* unique tags each within 20 chars.
+
+    Multi-word and non-broad on purpose: validate_tags enforces a long-tail floor
+    (TAG_MIN_NICHE) and a broad-tag ceiling, so single-word filler like "tag00"
+    would fail rules unrelated to what most of these tests are checking.
+    """
+    return [f"Ankh Pendant {i:02d}" for i in range(count)]
 
 
 # ─── Carrier Pillar Helpers ────────────────────────────────────────────────────
@@ -71,7 +76,7 @@ class TestTitleValidator:
     # ── Length rule ────────────────────────────────────────────────────────────
 
     def test_exact_min_length_passes(self) -> None:
-        title = _make_title(120)
+        title = _make_title(br.TITLE_MIN_LENGTH)
         valid, violations = validate_title(title)
         assert valid
         assert violations == []
@@ -109,8 +114,10 @@ class TestTitleValidator:
 
     def test_mothers_day_gift_fails(self) -> None:
         phrase = "Mother's Day Gift"
-        padding = "X" * (140 - len(phrase))
-        title = phrase + padding
+        # Space-separated: the forbidden-keyword scan matches on word boundaries,
+        # so glued-on padding ("GiftXXX") is correctly not a hit.
+        padding = "X" * (140 - len(phrase) - 1)
+        title = f"{phrase} {padding}"
         valid, violations = validate_title(title)
         assert not valid
         assert any("Mother" in v for v in violations)
@@ -225,13 +232,15 @@ class TestTagValidator:
     # ── Duplicates ─────────────────────────────────────────────────────────────
 
     def test_duplicate_tags_fail(self) -> None:
-        tags = _valid_tags(12) + ["tag00"]  # tag00 already at index 0
+        first = _valid_tags(1)[0]
+        tags = _valid_tags(12) + [first]  # already at index 0
         valid, violations = validate_tags(tags)
         assert not valid
         assert any("Duplicate" in v or "duplicate" in v.lower() for v in violations)
 
     def test_case_insensitive_duplicate_detection(self) -> None:
-        tags = _valid_tags(12) + ["TAG00"]  # duplicate of "tag00" in different case
+        first = _valid_tags(1)[0].upper()
+        tags = _valid_tags(12) + [first]  # duplicate of index 0 in different case
         valid, violations = validate_tags(tags)
         assert not valid
         assert any("uplicate" in v for v in violations)
@@ -367,7 +376,8 @@ class TestOriginalityChecker:
 
 class TestBusinessRuleConstants:
     def test_title_length_range(self) -> None:
-        assert br.TITLE_MIN_LENGTH == 120
+        # Guide §2 golden rule: always 137-140 characters.
+        assert br.TITLE_MIN_LENGTH == 137
         assert br.TITLE_MAX_LENGTH == 140
         assert br.TITLE_MIN_LENGTH < br.TITLE_MAX_LENGTH
 
@@ -738,8 +748,7 @@ class TestValidateField:
 
     def test_validate_field_tags_ok(self) -> None:
         from src.modules.approval.service import validate_field
-        tags = [f"tag{i:02d}" for i in range(13)]
-        ok, violations = validate_field("tags", tags)
+        ok, violations = validate_field("tags", _valid_tags(13))
         assert ok
         assert violations == []
 

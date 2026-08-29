@@ -61,3 +61,90 @@ def test_no_universals_seeded_leaves_candidates_untouched():
     gen.pool.get_universal_keywords.return_value = []
     existing = [{"tag": "cross necklace", "volume": None, "bucket": "pool"}]
     assert gen._prepend_universals(existing) == existing
+
+
+# ── Tag count floor (regression) ──────────────────────────────────────────────
+# normalize_tags drops tags that duplicate the paired title. Backfill originally
+# drew only from the pillar keyword pool — which is empty for every pillar in a
+# stock DB — so the drops were never replaced and listings shipped with 10 tags.
+# Etsy gives 13 slots and the guide treats all 13 as mandatory, so the count must
+# never fall short regardless of how bare the pool is.
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+from src.config.business_rules import TAG_COUNT
+from src.modules.content.tag_generator import TagGenerator
+from src.modules.llm.angles import ANGLE_CONSERVATIVE
+
+_FLOOR_TITLE = (
+    "Birthstone Ankh Pendant Necklace, Sterling Silver Egyptian Cross Chain "
+    "Necklace, Key of Life Jewelry Gift for Women"
+)
+# Three of these appear verbatim in the title above.
+_FLOOR_TAGS = [
+    "gift for her", "birthstone ankh", "minimalist necklace", "handmade gift",
+    "dainty necklace", "personalized", "necklace for woman", "birthday gift",
+    "pendant necklace", "layering necklace", "protection jewelry",
+    "religious jewelry", "key of life",
+]
+
+
+def _floor_generator(pool_candidates, universals):
+    llm = MagicMock()
+    llm.complete = AsyncMock(return_value=", ".join(_FLOOR_TAGS))
+    pool = MagicMock()
+    pool.get_candidates.return_value = pool_candidates
+    pool.get_universal_keywords.return_value = universals
+    research = MagicMock()
+    ctx = MagicMock()
+    ctx.has_data = False
+    research.build_for_product.return_value = ctx
+    return TagGenerator(llm, pool, research)
+
+
+def _floor_product():
+    product = MagicMock()
+    product.carrier_pillar = "birthstone"
+    product.shape = None
+    return product
+
+
+def _run_floor(pool_candidates, universals):
+    gen = _floor_generator(pool_candidates, universals)
+    return asyncio.run(
+        gen.generate_for_angle(_floor_product(), ANGLE_CONSERVATIVE, _FLOOR_TITLE)
+    )
+
+
+def test_empty_pool_still_yields_13_tags():
+    assert len(_run_floor([], [])) == TAG_COUNT
+
+
+def test_universals_are_used_when_pillar_pool_is_empty():
+    tags = _run_floor([], ["Handmade Charm", "Gift Idea Box", "Boho Amulet"])
+    assert len(tags) == TAG_COUNT
+    assert "Handmade Charm" in tags
+
+
+def test_pillar_pool_replaces_the_dropped_tags():
+    tags = _run_floor(["Egyptian Talisman", "Ra Symbol Charm", "Ancient Amulet"], [])
+    assert len(tags) == TAG_COUNT
+    assert "Egyptian Talisman" in tags
+    # Genuinely replaced, not merely restored.
+    assert "Birthstone Ankh" not in tags
+
+
+def test_dropped_tags_are_restored_only_as_a_last_resort():
+    tags = _run_floor([], [])
+    assert len(tags) == TAG_COUNT
+    # With nothing to replace them, the title-duplicates come back rather than
+    # leaving slots empty.
+    restored = {t.lower() for t in tags} & {"birthstone ankh", "pendant necklace", "key of life"}
+    assert restored
+
+
+def test_no_duplicates_after_backfill():
+    tags = _run_floor(["Egyptian Talisman"], ["Handmade Charm"])
+    lowered = [t.lower() for t in tags]
+    assert len(lowered) == len(set(lowered))

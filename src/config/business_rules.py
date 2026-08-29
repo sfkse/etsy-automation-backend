@@ -5,17 +5,42 @@ No logic here; only data declarations.
 """
 
 # ─── Title ────────────────────────────────────────────────────────────────────
-# Etsy's hard cap is 140 chars. The min is our own SEO floor — keeping it in the
-# 120–140 band still uses ~86% of available characters (well above the ~100-char
-# average of top-ranked Etsy titles) while giving the LLM a realistic target it
-# can hit without char-counting acrobatics. Previous value of 137 produced a
-# 4-char window that LLMs missed on nearly every generation, forcing the retry
-# path and often falling back to invalid titles that surfaced as approval
-# violations. See title_generator.py::_retry_with_relaxation.
-TITLE_MIN_LENGTH: int = 120
+# The training guide's golden rule (§2) is 137-140 chars: "Her zaman 137-140
+# karakter aralığında ol". This was briefly relaxed to 120 on the theory that
+# LLMs could not hit a 4-char window — but the real cause of the misses was the
+# substring bug below, which rejected every "Birthstone" title and forced the
+# retry path into its unvalidated fallback. With that fixed and the deterministic
+# padding pass in title_generator.py::_pad_to_band, the guide's band is
+# reachable, so it is restored here.
+TITLE_MIN_LENGTH: int = 137
 TITLE_MAX_LENGTH: int = 140
 TITLE_FIRST_NICHE_CHARS: int = 60  # first 60 chars = niche description zone
 TITLE_SEPARATOR: str = ", "        # comma-space, never pipe
+
+# Approved padding phrases. Appended by _pad_to_band to lift a short title into
+# the 137-140 band; also quoted in the retry prompt so the model and the padder
+# draw from one vocabulary. The padder picks the best-fitting phrase rather than
+# walking this list in order, so the spread of lengths (5-25 chars) is what lets
+# it close an arbitrary gap without overshooting TITLE_MAX_LENGTH.
+TITLE_PADDING_PHRASES: list[str] = [
+    "Charm",
+    "Gift Idea",
+    "for Women",
+    "Boho Charm",
+    "Jewelry Gift",
+    "Dainty Charm",
+    "Gift for Her",
+    "Chic Gift Idea",
+    "Charm Accessory",
+    "Jewelry Present",
+    "Layering Necklace",
+    "Everyday Necklace",
+    "Boho Chic Jewelry",
+    "Minimalist Jewelry",
+    "Handmade Charm Gift",
+    "Dainty Layering Charm",
+    "Minimalist Everyday Charm",
+]
 
 # ─── Forbidden title keywords ─────────────────────────────────────────────────
 FORBIDDEN_TITLE_KEYWORDS: list[str] = [
@@ -23,6 +48,16 @@ FORBIDDEN_TITLE_KEYWORDS: list[str] = [
     "Mother's Day Gift",  # use "Gifts for Mom"
     "Diamond",       # for brass/plated products
     "Floral",        # only for actual visual flowers, never letter-flowers
+]
+
+# Compounds that legitimately contain a forbidden keyword. "Birthstone" is a
+# carrier pillar (CARRIER_PILLARS below) — matching it as banned "Stone" made
+# every birthstone title invalid. These spans are removed before the scan.
+FORBIDDEN_TITLE_KEYWORD_EXCEPTIONS: list[str] = [
+    "Birthstone",
+    "Moonstone",
+    "Gemstone",
+    "Stonewashed",
 ]
 
 # Words that must not appear alone (must be accompanied by qualifier)
@@ -48,6 +83,43 @@ TAG_DISTRIBUTION: dict[str, dict[str, int]] = {
 FORBIDDEN_TAG_PHRASES: list[str] = [
     "Mother's Day Gift",  # use "Gifts for Mom"
 ]
+
+# Guide §3: "Büyük tekleri AZALT" — broad tags blow up ad spend without a
+# matching lift, so at most 1-2 of the 13 slots may be broad, and 8+ must be
+# long-tail (multi-word) niche phrases.
+TAG_MAX_BROAD: int = 2
+TAG_MIN_NICHE: int = 8
+
+# Broad ("büyük tek") terms. Gift occasions and bare material/style words are
+# high-volume and generic — they compete with the whole marketplace. Matched
+# case-insensitively against the full tag phrase, not as substrings, so
+# "gift for daughter" is broad while "ankh necklace" is not.
+BROAD_TAG_TERMS: frozenset[str] = frozenset({
+    # Gift occasions / recipients
+    "gifts for mom", "gift for mom", "gift for her", "gifts for her",
+    "gift for him", "gifts for him", "birthday gift", "christmas gift",
+    "gift for daughter", "gifts for daughter", "bridesmaid gift",
+    "gift for wife", "gift for girlfriend", "anniversary gift",
+    "valentines gift", "graduation gift", "holiday gift",
+    # Generic shop qualifiers
+    "handmade jewelry", "handmade gift", "personalized", "custom",
+    "customized", "jewelry", "necklace",
+    # Bare material / style words (fine inside a phrase, wasteful alone)
+    "gold", "silver", "sterling silver", "925 silver", "14k gold",
+    "14k gold plated", "gold plated", "dainty", "minimalist", "boho",
+})
+
+# The subset of broad terms that must stay OUT of a title's first 60 characters
+# (guide §2: "Burada büyük tekler değil, niş tanımlama olmalı"). Deliberately
+# excludes materials — the same §2 karat rule *requires* "925 Sterling Silver"
+# in the title, and the structural formula opens with [Malzeme].
+NICHE_ZONE_FORBIDDEN_TERMS: frozenset[str] = frozenset({
+    "gifts for mom", "gift for mom", "gift for her", "gifts for her",
+    "gift for him", "gifts for him", "birthday gift", "christmas gift",
+    "gift for daughter", "gifts for daughter", "bridesmaid gift",
+    "gift for wife", "gift for girlfriend", "anniversary gift",
+    "valentines gift", "graduation gift", "holiday gift",
+})
 
 # ─── Description ──────────────────────────────────────────────────────────────
 DESCRIPTION_MIN_WORDS: int = 150
@@ -94,3 +166,22 @@ CARRIER_PILLARS: list[str] = [
 # ─── Variants ─────────────────────────────────────────────────────────────────
 VARIANT_COUNT: int = 3
 VARIANT_IDS: list[str] = ["A", "B", "C"]
+
+# Guide §14: three variants exist to cast three different keyword nets. Past this
+# Jaccard overlap (≈7 of 13 shared tags) they compete with each other instead.
+VARIANT_MAX_TAG_OVERLAP: float = 0.5
+
+# ─── Material coherence ───────────────────────────────────────────────────────
+# Guide §15: one material story per listing. A "Sterling Silver" title carrying
+# "14K Gold Plated" tags sends Etsy contradictory attribute signals and reads as
+# careless to buyers. Keys are the claim families; values are the phrases that
+# assert them (matched case-insensitively as whole phrases).
+MATERIAL_CLAIM_TERMS: dict[str, frozenset[str]] = {
+    "silver": frozenset({
+        "sterling silver", "925 silver", "925 sterling silver", "silver",
+    }),
+    "gold": frozenset({
+        "gold plated", "14k gold plated", "14k gold", "18k gold", "gold ankh",
+        "solid gold", "gold",
+    }),
+}

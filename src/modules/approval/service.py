@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 import structlog
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.config.settings import Settings
@@ -25,7 +26,11 @@ from src.db.models import (
     ProductStatus,
     VariationRow,
 )
-from src.domain.validators import validate_tags, validate_title
+from src.domain.validators import (
+    validate_material_coherence,
+    validate_tags,
+    validate_title,
+)
 from src.modules.sheets.sync import upsert_product_row
 
 _settings = Settings()
@@ -36,12 +41,45 @@ _log = structlog.get_logger(__name__)
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
 
-def get_approval_queue(session: Session, sort: str = "newest") -> list[Product]:
-    """Return all products in AWAITING_APPROVAL with generated variants."""
-    q = session.query(Product).filter(
-        Product.status == ProductStatus.AWAITING_APPROVAL.value,
-        Product.generated_variants.isnot(None),
-    )
+# Queue filters. "pending" is the working queue; the others turn /approval into a
+# permanent archive so a product's variants stay reachable after it is approved
+# or published (approval never clears generated_variants).
+QUEUE_STATUS_FILTERS: dict[str, str | None] = {
+    "pending":   ProductStatus.AWAITING_APPROVAL.value,
+    "approved":  ProductStatus.APPROVED.value,
+    "published": ProductStatus.PUBLISHED.value,
+    "all":       None,
+}
+
+
+def get_approval_queue(
+    session: Session,
+    sort: str = "newest",
+    status_filter: str = "pending",
+    skus: list[str] | None = None,
+) -> list[Product]:
+    """Return products with generated variants, filtered by queue status.
+
+    status_filter: pending | approved | published | all. Anything else falls
+    back to "pending" (the awaiting-approval working queue).
+
+    skus: restrict the queue to these SKUs — how the Chrome extension hands one
+    build batch over to the web app for review.
+    """
+    if status_filter not in QUEUE_STATUS_FILTERS:
+        status_filter = "pending"
+
+    q = session.query(Product).filter(Product.generated_variants.isnot(None))
+
+    if skus:
+        q = q.filter(Product.sku.in_(skus))
+
+    status = QUEUE_STATUS_FILTERS[status_filter]
+    if status is not None:
+        # Case-insensitive: some legacy rows carry a display-cased status
+        # ("Approved") that would otherwise never match any tab.
+        q = q.filter(func.lower(Product.status) == status)
+
     if sort == "oldest":
         q = q.order_by(Product.created_at.asc())
     else:
@@ -103,7 +141,9 @@ def update_variant_field(
     if not product.generated_variants:
         return False
 
-    allowed_fields = {"title", "tags", "description"}
+    # estimated_ctr_signal is not user-editable, but per-field regeneration
+    # recomputes it whenever the title or tags it derives from change.
+    allowed_fields = {"title", "tags", "description", "estimated_ctr_signal"}
     if field not in allowed_fields:
         return False
 
@@ -355,13 +395,25 @@ def set_etsy_url(
 # ── Validation helpers ────────────────────────────────────────────────────────
 
 
-def validate_field(field: str, value: Any) -> tuple[bool, list[str]]:
-    """Run the business-rule validator for a single field. Returns (ok, violations)."""
+def validate_field(
+    field: str, value: Any, paired_title: str = ""
+) -> tuple[bool, list[str]]:
+    """Run the business-rule validator for a single field. Returns (ok, violations).
+
+    ``paired_title`` is the variant's current title. Tag rules that compare against
+    it — wasted slots and material coherence (guide §3, §15) — are only checked
+    when the caller can supply it.
+    """
     if field == "title":
         return validate_title(value)
     if field == "tags":
         tags = value if isinstance(value, list) else [t.strip() for t in value.split(",") if t.strip()]
-        return validate_tags(tags)
+        ok, violations = validate_tags(tags, paired_title)
+        if paired_title:
+            mat_ok, mat_violations = validate_material_coherence(paired_title, tags)
+            ok = ok and mat_ok
+            violations = violations + mat_violations
+        return (ok, violations)
     if field == "description":
         word_count = len(value.split())
         from src.config.business_rules import DESCRIPTION_MAX_WORDS, DESCRIPTION_MIN_WORDS, CLICHE_DESCRIPTION_PHRASES

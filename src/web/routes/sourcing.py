@@ -10,7 +10,9 @@ GET  /sourcing/{analysis_id}      — Poll analysis status + results
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+from dataclasses import dataclass
 from datetime import date, datetime
 
 import structlog
@@ -39,6 +41,7 @@ from src.db.models import (
 from src.db.session import SessionLocal
 from src.sourcing.image_io import download_remote_image, save_uploaded_image
 from src.sourcing.opportunity_scorer import OpportunityScorer
+from src.sourcing.rexven_normalizer import normalize_capture
 from src.sourcing.rexven_scraper import scrape_rexven_product
 from src.sourcing.vision_keyword_suggester import VisionKeywordSuggester
 
@@ -53,19 +56,186 @@ router = APIRouter(prefix="/sourcing", tags=["sourcing"])
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class RexvenMetadata:
+    """
+    Product metadata read off the live Rexven page by the Chrome extension.
+
+    Rexven is a client-rendered, auth-gated SPA, so `scrape_rexven_product`'s
+    httpx fetch sees far less than the extension's in-page reader does. These
+    fields let the extension hand over what it saw instead of leaving the
+    columns NULL — which previously left the Layer A vision prompt with
+    "(not provided)"/$0.00 and pinned the scorer's price_alignment sub-score
+    (25% weight) to 0.0 on every run.
+
+    Every field is optional; `None` means "not observed", and only observed
+    values are written.
+    """
+
+    title: str | None = None
+    category: str | None = None
+    cost_cents: int | None = None
+    premium_cost_cents: int | None = None
+    shipping_cents: int | None = None
+    satisa_uygun: bool | None = None
+    yeni: bool | None = None
+
+    # Structural capture. `options` and `raw_payload` arrive as JSON strings on
+    # the form and are decoded by `from_form` before reaching here.
+    options: list[dict] | None = None
+    context: dict | None = None
+    raw_payload: dict | list | None = None
+    description_html: str | None = None
+
+    def __bool__(self) -> bool:
+        return any(
+            v is not None
+            for v in (
+                self.title,
+                self.category,
+                self.cost_cents,
+                self.premium_cost_cents,
+                self.shipping_cents,
+                self.satisa_uygun,
+                self.yeni,
+                self.options,
+                self.context,
+                self.raw_payload,
+                self.description_html,
+            )
+        )
+
+    def apply_to(self, analysis: SourcingAnalysis) -> None:
+        # Titles come off the Turkish supplier page, matching rexven_scraper's
+        # title_tr; nothing here produces an English title.
+        if self.title:
+            analysis.rexven_title_tr = self.title
+        if self.category:
+            analysis.rexven_category = self.category
+        if self.cost_cents is not None:
+            analysis.rexven_cost_usd_cents = self.cost_cents
+        if self.premium_cost_cents is not None:
+            analysis.rexven_premium_cost_usd_cents = self.premium_cost_cents
+        if self.shipping_cents is not None:
+            analysis.rexven_shipping_cents = self.shipping_cents
+        if self.satisa_uygun is not None:
+            analysis.rexven_has_satisa_uygun_badge = self.satisa_uygun
+        if self.yeni is not None:
+            analysis.rexven_has_yeni_badge = self.yeni
+        if self.raw_payload is not None:
+            analysis.rexven_raw_payload = self.raw_payload
+
+        # Options and the spec block are normalized together: the prose supplies
+        # domains the closed DOM cannot show (a Radix select's options only exist
+        # while it is open), so neither is much use without the other.
+        if self.options is not None or self.description_html is not None:
+            options, attributes = normalize_capture(self.options, self.description_html)
+            if options:
+                analysis.rexven_options = options
+            if attributes:
+                if self.context:
+                    # Currency / destination / 'Sipariş yeri' are recorded beside
+                    # the attributes as provenance for the quoted prices — they
+                    # describe the market, not the product.
+                    attributes["capture_context"] = self.context
+                analysis.rexven_attributes = attributes
+
+    @staticmethod
+    def _decode(raw: str | None, what: str):
+        """Decode a JSON-encoded form field, tolerating garbage.
+
+        A malformed structural field must not cost us the capture: the image,
+        prices and title are the parts that block the pipeline, so a bad
+        `rexven_options` blob is logged and skipped rather than raising.
+        """
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError) as e:
+            _log.warning("rexven_metadata_decode_failed", field=what, error=str(e))
+            return None
+
+    @classmethod
+    def from_form(
+        cls,
+        *,
+        title: str | None = None,
+        category: str | None = None,
+        cost_cents: int | None = None,
+        premium_cost_cents: int | None = None,
+        shipping_cents: int | None = None,
+        satisa_uygun: bool | None = None,
+        yeni: bool | None = None,
+        options_json: str | None = None,
+        context_json: str | None = None,
+        raw_payload_json: str | None = None,
+        description_html: str | None = None,
+    ) -> "RexvenMetadata":
+        """Build from the multipart form, decoding the JSON-encoded fields."""
+        options = cls._decode(options_json, "rexven_options")
+        return cls(
+            title=title,
+            category=category,
+            cost_cents=cost_cents,
+            premium_cost_cents=premium_cost_cents,
+            shipping_cents=shipping_cents,
+            satisa_uygun=satisa_uygun,
+            yeni=yeni,
+            options=options if isinstance(options, list) else None,
+            context=cls._decode(context_json, "rexven_context"),
+            raw_payload=cls._decode(raw_payload_json, "rexven_raw_payload"),
+            description_html=description_html,
+        )
+
+
 async def _build_analysis_from_inputs(
     session: Session,
     rexven_url: str | None,
     rexven_sku: str | None,
     image: UploadFile | None,
     image_url: str | None = None,
+    metadata: "RexvenMetadata | None" = None,
 ) -> SourcingAnalysis:
-    """Create and persist a SourcingAnalysis from whichever input was provided."""
+    """
+    Create and persist a SourcingAnalysis from whichever input was provided.
+
+    Image resolution runs in precedence order: uploaded bytes → image_url →
+    server-side scrape of rexven_url → images saved against a known SKU.
+
+    `rexven_url` only triggers `scrape_rexven_product` when no image was supplied
+    another way. The Chrome extension reads the rendered, authenticated Rexven
+    page and posts the image *plus* `metadata`, which httpx cannot reproduce
+    against that client-rendered SPA; diverting it into the scrape would throw
+    away the good capture (and 422 when the scrape fails). Anything in `metadata`
+    overrides a scraped value for the same reason — the browser saw the page.
+    """
     from src.db.models import Product
 
     analysis = SourcingAnalysis(status=SourcingStatus.PENDING.value)
 
-    if rexven_url:
+    # Identifiers are recorded whichever branch below ends up supplying the image.
+    analysis.rexven_url = rexven_url
+    analysis.rexven_sku = rexven_sku
+    analysis.image_url = image_url
+
+    if image:
+        analysis.image_path = await save_uploaded_image(image)
+
+    elif image_url:
+        # Direct image URL captured from the rendered Rexven page DOM (the
+        # browser extension can read the SPA's real image URL that a server-side
+        # scrape can't). Download it here — httpx isn't subject to browser CORS,
+        # so this succeeds where an in-page fetch of the CDN gets blocked.
+        try:
+            analysis.image_path = download_remote_image(image_url)
+        except Exception as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not download product image: {e}",
+            ) from e
+
+    elif rexven_url:
         try:
             scraped = scrape_rexven_product(rexven_url)
         except Exception as e:
@@ -73,7 +243,6 @@ async def _build_analysis_from_inputs(
                 status_code=422, detail=f"Could not scrape Rexven URL: {e}"
             ) from e
 
-        analysis.rexven_url = rexven_url
         analysis.image_url = scraped.get("image_url")
         if scraped.get("image_url"):
             try:
@@ -97,7 +266,6 @@ async def _build_analysis_from_inputs(
             raise HTTPException(
                 status_code=404, detail=f"Product {rexven_sku} not found"
             )
-        analysis.rexven_sku = rexven_sku
         # Try to get image from product's images
         if product.images:
             from pathlib import Path
@@ -111,22 +279,8 @@ async def _build_analysis_from_inputs(
         if product.cost:
             analysis.rexven_cost_usd_cents = int(float(product.cost) * 100)
 
-    elif image:
-        analysis.image_path = await save_uploaded_image(image)
-
-    elif image_url:
-        # Direct image URL captured from the rendered Rexven page DOM (the
-        # browser extension can read the SPA's real image URL that a server-side
-        # scrape can't). Download it here — httpx isn't subject to browser CORS,
-        # so this succeeds where an in-page fetch of the CDN gets blocked.
-        analysis.image_url = image_url
-        try:
-            analysis.image_path = download_remote_image(image_url)
-        except Exception as e:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Could not download product image: {e}",
-            ) from e
+    if metadata:
+        metadata.apply_to(analysis)
 
     if not analysis.image_path:
         raise HTTPException(
@@ -151,11 +305,28 @@ async def suggest_keywords(
     rexven_sku: str | None = Form(None),
     image: UploadFile | None = File(None),
     image_url: str | None = Form(None),
+    rexven_title: str | None = Form(None),
+    rexven_category: str | None = Form(None),
+    rexven_cost_cents: int | None = Form(None),
+    rexven_premium_cost_cents: int | None = Form(None),
+    rexven_shipping_cents: int | None = Form(None),
+    rexven_satisa_uygun: bool | None = Form(None),
+    rexven_yeni: bool | None = Form(None),
+    rexven_options: str | None = Form(None),
+    rexven_context: str | None = Form(None),
+    rexven_raw_payload: str | None = Form(None),
+    rexven_description_html: str | None = Form(None),
     session: Session = Depends(get_session),
 ):
     """
     Layer A standalone — produce 15 keyword candidates from a Rexven product image.
-    Accepts one of: rexven_url, rexven_sku, direct image upload, or image_url.
+    Accepts one of: rexven_url, rexven_sku, direct image upload, or image_url,
+    plus optional rexven_* metadata read off the live page by the extension.
+
+    `rexven_options`, `rexven_context` and `rexven_raw_payload` are JSON-encoded
+    strings (multipart carries no nested structure); `rexven_description_html` is
+    the verbatim spec block. All four are optional — the extension omits them
+    when the page yielded nothing to capture.
     """
     if not any([rexven_url, rexven_sku, image, image_url]):
         raise HTTPException(
@@ -164,9 +335,26 @@ async def suggest_keywords(
         )
 
     analysis = await _build_analysis_from_inputs(
-        session, rexven_url, rexven_sku, image, image_url
+        session,
+        rexven_url,
+        rexven_sku,
+        image,
+        image_url,
+        RexvenMetadata.from_form(
+            title=rexven_title,
+            category=rexven_category,
+            cost_cents=rexven_cost_cents,
+            premium_cost_cents=rexven_premium_cost_cents,
+            shipping_cents=rexven_shipping_cents,
+            satisa_uygun=rexven_satisa_uygun,
+            yeni=rexven_yeni,
+            options_json=rexven_options,
+            context_json=rexven_context,
+            raw_payload_json=rexven_raw_payload,
+            description_html=rexven_description_html,
+        ),
     )
-
+    _log.info("analysis", analysis=analysis)
     suggester = VisionKeywordSuggester(session, api_key=_settings.ANTHROPIC_API_KEY)
     try:
         candidates = await asyncio.to_thread(suggester.run, analysis)
@@ -205,6 +393,17 @@ async def analyze_product(
     rexven_sku: str | None = Form(None),
     image: UploadFile | None = File(None),
     image_url: str | None = Form(None),
+    rexven_title: str | None = Form(None),
+    rexven_category: str | None = Form(None),
+    rexven_cost_cents: int | None = Form(None),
+    rexven_premium_cost_cents: int | None = Form(None),
+    rexven_shipping_cents: int | None = Form(None),
+    rexven_satisa_uygun: bool | None = Form(None),
+    rexven_yeni: bool | None = Form(None),
+    rexven_options: str | None = Form(None),
+    rexven_context: str | None = Form(None),
+    rexven_raw_payload: str | None = Form(None),
+    rexven_description_html: str | None = Form(None),
     force_refresh: bool = Form(False),
     session: Session = Depends(get_session),
 ):
@@ -224,7 +423,24 @@ async def analyze_product(
         )
 
     analysis = await _build_analysis_from_inputs(
-        session, rexven_url, rexven_sku, image, image_url
+        session,
+        rexven_url,
+        rexven_sku,
+        image,
+        image_url,
+        RexvenMetadata.from_form(
+            title=rexven_title,
+            category=rexven_category,
+            cost_cents=rexven_cost_cents,
+            premium_cost_cents=rexven_premium_cost_cents,
+            shipping_cents=rexven_shipping_cents,
+            satisa_uygun=rexven_satisa_uygun,
+            yeni=rexven_yeni,
+            options_json=rexven_options,
+            context_json=rexven_context,
+            raw_payload_json=rexven_raw_payload,
+            description_html=rexven_description_html,
+        ),
     )
 
     # Layer A: fast (~3-5s), run synchronously before returning
@@ -337,13 +553,51 @@ _TEXT_MOTIF_BOOST = 0.5  # a fully on-motif keyword gets up to +50% relevance fa
 
 # Ultra-generic tokens shared by most jewelry keywords/attributes — they carry no
 # motif signal, so they're ignored on both sides of the text match.
-_MOTIF_STOPWORDS = frozenset({
-    "necklace", "necklaces", "jewelry", "jewellery", "pendant", "pendants", "chain",
-    "charm", "charms", "gift", "gifts", "for", "her", "him", "women", "womens", "men",
-    "mens", "with", "and", "the", "an", "or", "of", "piece", "wear", "everyday",
-    "gold", "silver", "rose", "plated", "metal", "dainty", "minimalist", "contemporary",
-    "modern", "stone", "gemstone", "crystal", "green", "gold-plated",
-})
+_MOTIF_STOPWORDS = frozenset(
+    {
+        "necklace",
+        "necklaces",
+        "jewelry",
+        "jewellery",
+        "pendant",
+        "pendants",
+        "chain",
+        "charm",
+        "charms",
+        "gift",
+        "gifts",
+        "for",
+        "her",
+        "him",
+        "women",
+        "womens",
+        "men",
+        "mens",
+        "with",
+        "and",
+        "the",
+        "an",
+        "or",
+        "of",
+        "piece",
+        "wear",
+        "everyday",
+        "gold",
+        "silver",
+        "rose",
+        "plated",
+        "metal",
+        "dainty",
+        "minimalist",
+        "contemporary",
+        "modern",
+        "stone",
+        "gemstone",
+        "crystal",
+        "green",
+        "gold-plated",
+    }
+)
 
 
 def _motif_tokens(detected: dict | None) -> set[str]:
@@ -352,7 +606,11 @@ def _motif_tokens(detected: dict | None) -> set[str]:
     if not detected:
         return set()
     blob = " ".join(str(detected.get(k, "")) for k in ("theme", "form", "style"))
-    return {t for t in re.findall(r"[a-z]+", blob.lower()) if len(t) >= 4 and t not in _MOTIF_STOPWORDS}
+    return {
+        t
+        for t in re.findall(r"[a-z]+", blob.lower())
+        if len(t) >= 4 and t not in _MOTIF_STOPWORDS
+    }
 
 
 def _text_relevance(keyword: str, motif: set[str]) -> float:
@@ -360,14 +618,19 @@ def _text_relevance(keyword: str, motif: set[str]) -> float:
     Prefix-matches so egypt/egyptian and symbol/symbolic count. 0 when no motif."""
     if not motif:
         return 0.0
-    kw_tokens = [t for t in re.findall(r"[a-z]+", keyword.lower())
-                 if len(t) >= 3 and t not in _MOTIF_STOPWORDS]
+    kw_tokens = [
+        t
+        for t in re.findall(r"[a-z]+", keyword.lower())
+        if len(t) >= 3 and t not in _MOTIF_STOPWORDS
+    ]
     if not kw_tokens:
         return 0.0
 
     def hit(t: str) -> bool:
         for m in motif:
-            if t == m or (len(t) >= 4 and len(m) >= 4 and (t.startswith(m) or m.startswith(t))):
+            if t == m or (
+                len(t) >= 4 and len(m) >= 4 and (t.startswith(m) or m.startswith(t))
+            ):
                 return True
         return False
 
@@ -387,7 +650,9 @@ def _rerank_by_relevance(scores: list, relevance_by_kw: dict, text_by_kw: dict) 
     When neither signal is informative, the factor is uniform and the
     opportunity_score order is preserved — safe when CLIP or attributes are absent.
     """
-    present = [v for v in (relevance_by_kw.get(s.keyword) for s in scores) if v is not None]
+    present = [
+        v for v in (relevance_by_kw.get(s.keyword) for s in scores) if v is not None
+    ]
     neutral = (sum(present) / len(present)) if present else 1.0
 
     def factor(kw: str) -> float:
@@ -424,29 +689,44 @@ def _embed_analysis_listings(session, embedder, analysis_id: int) -> None:
     if not listings:
         return
 
+    # A listing has one row per keyword it was scraped for, and the embedding is
+    # a property of the image. Embed once per listing_id and copy the vector to
+    # its siblings — embedding per row would multiply CLIP cost by however many
+    # keywords surfaced the same listing, for identical vectors.
+    by_listing: dict[str, list[CompetitorListing]] = {}
+    for listing in listings:
+        by_listing.setdefault(listing.listing_id, []).append(listing)
+
     embedded = 0
     failed = 0
-    for listing in listings:
+    for listing_id, siblings in by_listing.items():
+        head = siblings[0]
         try:
-            emb = embedder.embed_image_url(listing.image_url)
-            listing.image_embedding = emb.tolist()
-            listing.image_embedding_model = embedder.MODEL_NAME
-            listing.image_embedding_computed_at = datetime.utcnow()
+            emb = embedder.embed_image_url(head.image_url)
+            vector = emb.tolist()
+            model = embedder.MODEL_NAME
             embedded += 1
         except Exception as e:
             # [] sentinel = "tried and failed" (vs NULL = "not yet tried").
-            listing.image_embedding = []
-            listing.image_embedding_computed_at = datetime.utcnow()
+            vector = []
+            model = None
             failed += 1
-            _log.warning(
-                "layer_c_embed_failed", listing_id=listing.listing_id, error=str(e)
-            )
+            _log.warning("layer_c_embed_failed", listing_id=listing_id, error=str(e))
+
+        now = datetime.utcnow()
+        for row in siblings:
+            row.image_embedding = vector
+            if model is not None:
+                row.image_embedding_model = model
+            row.image_embedding_computed_at = now
+
     session.commit()
     _log.info(
         "layer_c_embeddings_computed",
         analysis_id=analysis_id,
         embedded=embedded,
         failed=failed,
+        rows=len(listings),
     )
 
 
@@ -489,7 +769,11 @@ def _run_layer_c(session, analysis: SourcingAnalysis, scores: list) -> None:
 
         # Second signal: does the keyword name the product's motif (theme/form)?
         detected = next(
-            (c.detected_attributes for c in analysis.candidates if c.detected_attributes),
+            (
+                c.detected_attributes
+                for c in analysis.candidates
+                if c.detected_attributes
+            ),
             None,
         )
         motif = _motif_tokens(detected)
@@ -589,8 +873,15 @@ def _card_price_cents(card: dict) -> "int | None":
 def _card_to_listing_from_extension(
     card: dict,
     analysis_id: int,
+    keyword: str | None = None,
 ) -> "CompetitorListing | None":
-    """Map a Chrome extension Phase-1 search card to a CompetitorListing ORM row."""
+    """Map a Chrome extension Phase-1 search card to a CompetitorListing ORM row.
+
+    `keyword` overrides the card's own value so the stored `keyword_searched`
+    is byte-identical to the key the caller deduped on — otherwise a card
+    carrying stray whitespace is stored under a keyword that neither the next
+    ingest's dedup nor `_fetch_top20` will match.
+    """
     listing_id = str(card.get("listing_id") or "").strip()
     if not listing_id:
         return None
@@ -605,7 +896,7 @@ def _card_to_listing_from_extension(
     return CompetitorListing(
         listing_id=listing_id,
         url=card.get("url") or f"https://www.etsy.com/listing/{listing_id}",
-        keyword_searched=card.get("keyword"),
+        keyword_searched=keyword if keyword is not None else card.get("keyword"),
         rank_in_search=card.get("rank"),
         title=card.get("title") or "",
         image_url=card.get("image_url") or "",
@@ -658,17 +949,34 @@ async def ingest_and_score(
     cards: list[dict] = body.get("cards", [])
 
     ingested = 0
-    seen_in_batch: set[str] = set()
+    skipped_no_keyword = 0
+    # Dedup is per (listing, keyword), NOT per listing. Deduping on listing_id
+    # alone let the first keyword to see a listing claim it permanently, so a
+    # niche keyword whose Etsy results overlap an already-scraped generic one
+    # retained too few rows to clear OpportunityScorer's 5-row floor and was
+    # dropped without ever being scored. See CompetitorListing's docstring.
+    seen_in_batch: set[tuple[str, str]] = set()
     for card in cards:
         listing_id = str(card.get("listing_id") or "").strip()
         if not listing_id:
             continue
-        if listing_id in seen_in_batch:
+
+        # A card with no keyword cannot be fetched by `_fetch_top20` (which
+        # filters on keyword_searched), so storing it creates a row no scorer
+        # can ever reach.
+        keyword = str(card.get("keyword") or "").strip()
+        if not keyword:
+            skipped_no_keyword += 1
             continue
-        seen_in_batch.add(listing_id)
+
+        if (listing_id, keyword) in seen_in_batch:
+            continue
+        seen_in_batch.add((listing_id, keyword))
 
         already = (
-            session.query(CompetitorListing).filter_by(listing_id=listing_id).first()
+            session.query(CompetitorListing)
+            .filter_by(listing_id=listing_id, keyword_searched=keyword)
+            .first()
         )
         if already:
             # Update sourcing link if not already set
@@ -678,7 +986,11 @@ async def ingest_and_score(
             if already.sales_signal_score is None:
                 already.sales_signal_score = compute_sales_signal_score(already)
             continue
-        listing = _card_to_listing_from_extension(card, analysis_id)
+
+        # Not seen *for this keyword* — insert even when the same listing already
+        # exists under a different one. That second row is what gives each
+        # keyword its own top-20.
+        listing = _card_to_listing_from_extension(card, analysis_id, keyword)
         if listing:
             # Score at ingest so Layer B's activity sub-score has a Tier-B
             # proxy fallback available even when EHunt data is absent.
@@ -692,6 +1004,7 @@ async def ingest_and_score(
         analysis_id=analysis_id,
         ingested=ingested,
         total=len(cards),
+        skipped_no_keyword=skipped_no_keyword,
     )
 
     background_tasks.add_task(_run_layer_b_and_c, analysis_id)
@@ -827,14 +1140,19 @@ async def ingest_phase2(
         lid = _listing_id_from_url(detail.get("url"))
         if not lid:
             continue
-        row = session.query(CompetitorListing).filter_by(listing_id=lid).first()
-        if row is None:
+        # A listing now has one row per keyword it was scraped for, and Phase 2
+        # detail (tags, description, view/cart counts) is a property of the
+        # listing, not of the keyword that surfaced it. Enrich every sibling row
+        # — taking only `.first()` would leave the other keywords' copies
+        # un-enriched and make their KeywordResearch refresh look empty.
+        rows = session.query(CompetitorListing).filter_by(listing_id=lid).all()
+        if not rows:
             continue  # only enrich listings we already scraped in Phase 1
-        incoming = CompetitorListing(
-            listing_id=lid, **_detail_to_listing_fields(detail)
-        )
-        merge_listing(row, incoming)
-        row.sales_signal_score = compute_sales_signal_score(row)
+        fields = _detail_to_listing_fields(detail)
+        for row in rows:
+            incoming = CompetitorListing(listing_id=lid, **fields)
+            merge_listing(row, incoming)
+            row.sales_signal_score = compute_sales_signal_score(row)
         updated += 1
     session.commit()
     _log.info(
@@ -865,9 +1183,20 @@ async def ingest_phase2(
 @router.get("/{analysis_id}")
 async def get_analysis(
     analysis_id: int,
+    limit: int | None = None,
     session: Session = Depends(get_session),
 ):
-    """Return analysis status and top-5 recommended keywords."""
+    """Return analysis status and its ranked keyword recommendations.
+
+    Every scored keyword is returned by default. This used to be hard-capped at
+    the top 5, which silently discarded most of the work: analysis #10 scored 11
+    keywords and showed 5, hiding — among others — all three birthstone keywords
+    for a *birthstone* necklace, at ranks 7, 10 and 11. The cap looked like a
+    display detail but was the main reason the product's own differentiating
+    keywords never reached the user.
+
+    Pass `limit` to truncate explicitly.
+    """
     analysis = session.query(SourcingAnalysis).filter_by(id=analysis_id).first()
     if not analysis:
         raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
@@ -876,6 +1205,8 @@ async def get_analysis(
         analysis.scores,
         key=lambda s: s.rank_in_recommendation or 999,
     )
+    if limit is not None and limit > 0:
+        scores = scores[:limit]
 
     # Build detected_attributes from first candidate (they all share the same)
     detected = {}
@@ -919,8 +1250,13 @@ async def get_analysis(
                     "estimated_page": s.estimated_page,
                     "visual_similarity_support": s.visual_similarity_support,
                 }
-                for s in scores[:5]
+                for s in scores
             ],
+            # Layer A keywords that Layer B had too little competitor data to
+            # score. Surfaced so the specific long-tail candidates — the ones
+            # most likely to lack coverage — are visible and can be sent through
+            # Phase 1, instead of disappearing from the recommendations.
+            "unscored_candidates": analysis.unscored_candidates or [],
             "error": analysis.error_message,
             "created_at": (
                 analysis.created_at.isoformat() if analysis.created_at else None

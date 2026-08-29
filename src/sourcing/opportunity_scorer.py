@@ -6,7 +6,8 @@ candidate, based on the top-20 competitor listings already in the DB.
 
 Sub-scores (all 0.0–1.0):
   new_shop_share   – fraction of top-20 with shop_age < 2yr  (weight 0.30)
-  price_alignment  – Rexven cost × 4 fits the top-20 price band (weight 0.25)
+  price_alignment  – where the top-20 median price sits between break-even and
+                     landed cost × RETAIL_MULTIPLIER          (weight 0.25)
   activity         – share of top-20 with eh_sales_recent ≥ 1  (weight 0.25)
   competition      – inverted log of keyword_total_results      (weight 0.10)
   diversity        – anti-dominance: 1 - max single-shop share  (weight 0.10)
@@ -44,47 +45,113 @@ class OpportunityScorer:
         "diversity": 0.10,
     }
 
-    # Rexven-to-retail multiplier (Etsy price ÷ Rexven cost).
-    # Use 4.0 as conservative baseline (Etsy fees + ads eat margin).
+    # Rexven-to-retail multiplier (Etsy price ÷ Rexven landed cost) we aim for.
+    # 4.0 is a conservative target, not a hard requirement — Etsy fees + ads eat
+    # margin, but a market pricing below it is squeezed, not unsellable.
     RETAIL_MULTIPLIER = 4.0
+
+    # Below this multiple of landed cost, Etsy's cut (transaction + payment +
+    # listing + ads, ~15-20% of revenue) leaves nothing worth having. This is the
+    # zero point of `price_alignment`; RETAIL_MULTIPLIER is where it saturates.
+    BREAKEVEN_MULTIPLIER = 1.5
 
     def __init__(self, session: Session):
         self.session = session
+        # Populated by score_analysis: candidates that had too little competitor
+        # data to score. Also persisted to analysis.unscored_candidates.
+        self.skipped_candidates: list[dict] = []
+
+    @staticmethod
+    def _cost_basis_cents(analysis: SourcingAnalysis) -> int:
+        """The supplier cost this keyword's target retail price is derived from.
+
+        Must agree with what ListingBuilder actually prices off
+        (`orchestrator.py` — landed cost, i.e. product + shipping), or the
+        scorer validates a price that never goes live. Shipping is near-flat
+        while product cost varies several-fold, so ignoring it understated the
+        target by +48% on a $15.40 silver item and +112% on a $6.60 brass one.
+
+        The premium tier is preferred because that is the tier the extension
+        picks in `pickRexvenPrices`, and the two must use the same basis.
+
+        Rows captured before `rexven_shipping_cents` existed have it NULL and
+        keep the old product-only behaviour, so historical scores stay
+        self-consistent instead of shifting under a re-score.
+        """
+        product = (
+            analysis.rexven_premium_cost_usd_cents
+            or analysis.rexven_cost_usd_cents
+            or 0
+        )
+        return product + (analysis.rexven_shipping_cents or 0)
+
+    # Minimum competitor listings before a keyword can be scored. Below this the
+    # sub-scores are quantized too coarsely to mean anything (one listing moves
+    # `activity` by 20+ points).
+    MIN_LISTINGS_TO_SCORE = 5
 
     def score_analysis(self, analysis: SourcingAnalysis) -> list[KeywordScore]:
         """
         Compute scores for all candidates of an analysis. Persists results.
         Returns ranked list of KeywordScore rows (rank 1 = best opportunity).
+
+        Candidates that could not be scored are recorded on
+        ``self.skipped_candidates`` rather than only logged — a keyword dropped
+        for want of competitor data is a keyword the user should be offered a
+        "Run Phase 1" button for, not one that silently disappears from the
+        recommendations.
         """
         analysis.status = SourcingStatus.LAYER_B_RUNNING.value
         self.session.commit()
 
-        rexven_cost = (
-            analysis.rexven_premium_cost_usd_cents
-            or analysis.rexven_cost_usd_cents
-            or 0
+        target_retail_cents = int(
+            self._cost_basis_cents(analysis) * self.RETAIL_MULTIPLIER
         )
-        target_retail_cents = int(rexven_cost * self.RETAIL_MULTIPLIER)
+
+        # Scoring an analysis is idempotent: a keyword already scored for it is
+        # refreshed, not duplicated. Reachable in normal use — every
+        # /ingest-and-score post queues Layer B again, so a follow-up Phase 1 run
+        # for a single keyword used to re-score the whole analysis and leave two
+        # rows per keyword.
+        existing_by_keyword = {s.keyword: s for s in analysis.scores}
 
         scores: list[KeywordScore] = []
+        skipped: list[dict] = []
         for candidate in analysis.candidates:
             # Broad-tier keywords are "competition giants — context only" (Layer A).
             # They score well on market structure but are the wrong target for a
             # specific product, so they're excluded from the recommendation ranking.
             if candidate.tier == KeywordTier.BROAD.value:
                 _log.info("scorer_skip_broad_tier", keyword=candidate.keyword)
+                # Deliberately excluded, not missing data — kept out of the
+                # skipped list so the UI doesn't invite a pointless Phase 1 run.
                 continue
 
             top20 = self._fetch_top20(candidate.keyword)
-            if len(top20) < 5:
+            if len(top20) < self.MIN_LISTINGS_TO_SCORE:
                 _log.info(
                     "scorer_skip_insufficient_data",
                     keyword=candidate.keyword,
                     count=len(top20),
                 )
+                skipped.append(
+                    {
+                        "keyword": candidate.keyword,
+                        "tier": candidate.tier,
+                        "reason": "insufficient_data",
+                        "listings_found": len(top20),
+                        "listings_required": self.MIN_LISTINGS_TO_SCORE,
+                    }
+                )
                 continue
 
-            score_row = self._score_single(analysis, candidate, top20, target_retail_cents)
+            score_row = self._score_single(
+                analysis,
+                candidate,
+                top20,
+                target_retail_cents,
+                existing_by_keyword.get(candidate.keyword),
+            )
             scores.append(score_row)
 
         scores.sort(key=lambda s: (s.opportunity_score or 0), reverse=True)
@@ -93,12 +160,15 @@ class OpportunityScorer:
 
         self.session.add_all(scores)
         analysis.layer_b_completed = True
+        analysis.unscored_candidates = skipped or None
         self.session.commit()
 
+        self.skipped_candidates = skipped
         _log.info(
             "opportunity_scorer_complete",
             analysis_id=analysis.id,
             scored=len(scores),
+            skipped=len(skipped),
         )
         return scores
 
@@ -140,6 +210,7 @@ class OpportunityScorer:
         candidate: KeywordCandidate,
         top20: list[CompetitorListing],
         target_retail_cents: int,
+        existing: "KeywordScore | None" = None,
     ) -> KeywordScore:
         n = len(top20)
 
@@ -147,20 +218,54 @@ class OpportunityScorer:
         new_shops = sum(1 for l in top20 if (l.shop_age_years or 99) < 2)
         score_new_shop_share = new_shops / n
 
-        # Sub-score 2: price alignment
+        # Sub-score 2: price headroom — how much margin the market's typical
+        # price leaves over our landed cost.
+        #
+        # This was two-sided: full marks when target_retail_cents landed inside
+        # the top-20's p25..p75, otherwise a penalty on |target - median|. Both
+        # halves were wrong.
+        #
+        # The band check rewarded *dispersion*, not affordability. Handmade
+        # jewelry spreads are enormous (one real keyword ran $27 to $213), so
+        # almost any target falls between p25 and p75: on analysis #10, 8 of 11
+        # keywords scored a perfect 1.0 while every one of their medians sat
+        # 13-47% BELOW the target. The three that were penalised were simply the
+        # ones with tight bands. A 25%-weight sub-score was pinned at 1.0 for
+        # most keywords and effectively measured price noise.
+        #
+        # The distance fallback was symmetric, so a market pricing well ABOVE our
+        # cost basis — the best possible finding, since the multiplier is a
+        # target we want to beat — was marked down exactly like one pricing below
+        # it.
+        #
+        # Now: score where the market's median sits between break-even and the
+        # target multiple, saturating at the top. Monotonic in the right
+        # direction (richer market = better) and reads as "how far from
+        # break-even toward our target does the typical competitor price get us".
+        # Median, not mean, so the long tail of outliers that used to game the
+        # band can't move it.
+        #
+        # A missing supplier cost gives target_retail_cents == 0, which would
+        # score every market a flat 1.0 here — a confident positive signal drawn
+        # from no data at all. Treat it as unknown, same as too few prices.
         prices = [l.price_cents for l in top20 if l.price_cents and l.price_cents > 0]
-        if len(prices) >= 5:
-            p25 = statistics.quantiles(prices, n=4)[0]
-            p75 = statistics.quantiles(prices, n=4)[2]
-            if p25 <= target_retail_cents <= p75:
-                score_price_alignment = 1.0
+        if target_retail_cents <= 0:
+            score_price_alignment = 0.5  # no supplier cost — unknown, not bad
+        elif len(prices) >= 5:
+            median_price = statistics.median(prices)
+            # target is landed x RETAIL_MULTIPLIER, so scaling it by the ratio of
+            # the multipliers recovers landed x BREAKEVEN_MULTIPLIER without
+            # needing the cost basis passed down again.
+            breakeven_cents = target_retail_cents * (
+                self.BREAKEVEN_MULTIPLIER / self.RETAIL_MULTIPLIER
+            )
+            span = target_retail_cents - breakeven_cents
+            if span > 0:
+                score_price_alignment = max(
+                    0.0, min(1.0, (median_price - breakeven_cents) / span)
+                )
             else:
-                median_price = statistics.median(prices)
-                if median_price > 0:
-                    distance = abs(target_retail_cents - median_price) / median_price
-                    score_price_alignment = max(0.0, 1.0 - min(distance, 1.0))
-                else:
-                    score_price_alignment = 0.5
+                score_price_alignment = 0.5
         else:
             score_price_alignment = 0.5  # insufficient data
 
@@ -203,6 +308,25 @@ class OpportunityScorer:
         avg_price = int(statistics.mean(prices)) if prices else 0
         ages = [l.shop_age_years for l in top20 if l.shop_age_years]
         avg_shop_age = statistics.mean(ages) if ages else 0.0
+
+        # Updated in place when this analysis has been scored before, so a
+        # re-score (the "Run Phase 1" → re-ingest → Layer B loop) refreshes the
+        # existing row instead of inserting a rival copy of the same keyword.
+        # Preserving the id also keeps `Product.selected_keyword_score_id`
+        # pointing at a live row.
+        if existing is not None:
+            existing.score_new_shop_share = round(score_new_shop_share, 4)
+            existing.score_price_alignment = round(score_price_alignment, 4)
+            existing.score_activity = round(score_activity, 4)
+            existing.score_competition = round(score_competition, 4)
+            existing.score_diversity = round(score_diversity, 4)
+            existing.opportunity_score = round(opportunity_score, 4)
+            existing.top20_avg_price_cents = avg_price
+            existing.top20_avg_shop_age = round(avg_shop_age, 2)
+            existing.top20_keyword_total_results = total_results
+            existing.top20_unique_shops = len(shop_counts)
+            existing.top20_with_recent_sales = with_sales
+            return existing
 
         return KeywordScore(
             analysis_id=analysis.id,

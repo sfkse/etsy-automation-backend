@@ -19,6 +19,7 @@ import structlog
 
 from src.config.settings import Settings
 from src.db.models import Product
+from src.domain.validators import validate_variant_divergence
 from src.modules.content.batch_generator import (
     BatchGenerationError,
     BatchTitleTagGenerator,
@@ -82,6 +83,19 @@ class VariantBundleOrchestrator:
             for angle in angles
         ]
         variants = list(await asyncio.gather(*variant_tasks))
+
+        # Guide §14: three angles exist to cast three different keyword nets.
+        # Warn rather than regenerate — which variants to diversify is a keyword
+        # judgment call, so it surfaces for review instead of burning an LLM call.
+        divergent, overlap_violations = validate_variant_divergence(
+            {v.variant_id: v.tags for v in variants}
+        )
+        if not divergent:
+            _log.warning(
+                "variants_too_similar",
+                sku=product.sku,
+                violations=overlap_violations,
+            )
 
         snapshot_id = self.research.current_snapshot_id(product)
         return VariantBundle(

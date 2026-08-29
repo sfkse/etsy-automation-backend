@@ -58,8 +58,10 @@ def _make_valid_tags() -> list[str]:
         "Dainty Cross",
         "Religious Gift",
         "Gifts for Mom",
-        "Sterling Silver",
-        "Cross Jewelry",
+        # Not "Sterling Silver" / "Cross Jewelry": both appear verbatim in the
+        # paired title, which the phrase-based wasted-slot check now flags.
+        "Faith Charm",
+        "Christian Charm",
         "Pendant Necklace",
         "Baptism Gift",
         "Confirmation Gift",

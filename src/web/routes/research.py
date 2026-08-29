@@ -100,9 +100,17 @@ async def import_csv(
 
         listing.sales_signal_score = compute_sales_signal_score(listing)
 
+        # Matched on (listing, keyword), not listing alone: a listing that ranks
+        # for a second keyword is a genuinely new row now. Matching on
+        # listing_id alone would skip it as "already imported" and leave that
+        # keyword short of competitor data — the same survivorship bug the
+        # sourcing ingest had.
         existing = (
             session.query(CompetitorListing)
-            .filter_by(listing_id=listing.listing_id)
+            .filter_by(
+                listing_id=listing.listing_id,
+                keyword_searched=listing.keyword_searched,
+            )
             .first()
         )
         if existing:

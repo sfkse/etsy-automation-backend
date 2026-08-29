@@ -10,19 +10,26 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 
 from src.config.business_rules import (
+    BROAD_TAG_TERMS,
     CLICHE_DESCRIPTION_PHRASES,
     DESCRIPTION_MAX_SIMILARITY,
     DESCRIPTION_MAX_WORDS,
     DESCRIPTION_MIN_WORDS,
     FORBIDDEN_TAG_PHRASES,
     FORBIDDEN_TITLE_KEYWORDS,
+    FORBIDDEN_TITLE_KEYWORD_EXCEPTIONS,
+    MATERIAL_CLAIM_TERMS,
+    NICHE_ZONE_FORBIDDEN_TERMS,
     PENDANT_MUST_BE,
     SOLID_GOLD_PLATED_CONFLICT,
     TAG_COUNT,
+    TAG_MAX_BROAD,
     TAG_MAX_LENGTH,
+    TAG_MIN_NICHE,
     TITLE_FIRST_NICHE_CHARS,
     TITLE_MAX_LENGTH,
     TITLE_MIN_LENGTH,
+    VARIANT_MAX_TAG_OVERLAP,
 )
 from src.db.models import Product
 
@@ -30,6 +37,47 @@ from src.db.models import Product
 _STOP_WORDS: frozenset[str] = frozenset(
     {"and", "for", "the", "with", "a", "an", "of", "in", "to", "by", "at"}
 )
+
+# Tokens that must keep their exact casing when a tag is title-cased.
+_TAG_CASE_LITERALS: dict[str, str] = {
+    "cz": "CZ",
+    "14k": "14K",
+    "18k": "18K",
+    "22k": "22K",
+    "925": "925",
+    "usa": "USA",
+}
+
+# Short function words stay lowercase unless they lead the tag — the guide's own
+# examples are "Gifts for Mom" and "Key of Life", not "Gifts For Mom".
+_TAG_LOWERCASE_WORDS: frozenset[str] = frozenset(
+    {"for", "of", "the", "with", "a", "an", "and", "in", "to", "by", "at"}
+)
+
+
+def _strip_keyword_exceptions(text: str) -> str:
+    """Blank out legitimate compounds ("Birthstone") so the forbidden-keyword
+    scan below cannot match the banned word hiding inside them."""
+    for exception in FORBIDDEN_TITLE_KEYWORD_EXCEPTIONS:
+        text = re.sub(rf"\b{re.escape(exception)}\b", " ", text, flags=re.IGNORECASE)
+    return text
+
+
+def _case_tag_word(word: str, is_first: bool) -> str:
+    """Title-case one tag word, honouring literals ("14K") and keeping function
+    words lowercase unless they lead the tag."""
+    lower = word.lower()
+    if lower in _TAG_CASE_LITERALS:
+        return _TAG_CASE_LITERALS[lower]
+    if not is_first and lower in _TAG_LOWERCASE_WORDS:
+        return lower
+    return word[:1].upper() + word[1:]
+
+
+def _contains_phrase(haystack: str, phrase: str) -> bool:
+    """Whole-phrase, case-insensitive containment with word boundaries, so
+    "gold" does not match "Gold Plated" and "Stone" does not match "Birthstone"."""
+    return re.search(rf"\b{re.escape(phrase)}\b", haystack, re.IGNORECASE) is not None
 
 # Minimum characters for a sentence fragment to be worth embedding — drops
 # stray "." splits and trivial fragments from similarity comparison.
@@ -74,10 +122,14 @@ def validate_title(
             f"Length {length} not in [{TITLE_MIN_LENGTH}, {TITLE_MAX_LENGTH}]"
         )
 
-    # 2. Forbidden keywords (case-insensitive)
+    # 2. Forbidden keywords. Matched on word boundaries against a copy with the
+    #    legitimate compounds removed — a plain substring scan flagged "Stone"
+    #    inside "Birthstone", invalidating every birthstone title and pushing
+    #    generation into its unvalidated fallback path.
     title_lower = title.lower()
+    scannable = _strip_keyword_exceptions(title)
     for keyword in FORBIDDEN_TITLE_KEYWORDS:
-        if keyword.lower() in title_lower:
+        if _contains_phrase(scannable, keyword):
             violations.append(f"Forbidden keyword '{keyword}' in title")
 
     # 3. "Pendant" must appear as "Pendant Necklace" at least once. Descriptive
@@ -118,6 +170,19 @@ def validate_title(
                 f"Target keyword '{target_keyword}' not found in first "
                 f"{TITLE_FIRST_NICHE_CHARS} characters"
             )
+
+    # 7. The niche zone must describe the product, not chase broad terms. Guide
+    #    §2: "Burada büyük tekler değil, niş tanımlama olmalı."
+    niche_zone = title[:TITLE_FIRST_NICHE_CHARS]
+    intruders = sorted(
+        term for term in NICHE_ZONE_FORBIDDEN_TERMS
+        if _contains_phrase(niche_zone, term)
+    )
+    if intruders:
+        violations.append(
+            f"Broad terms {intruders} inside the first "
+            f"{TITLE_FIRST_NICHE_CHARS} chars (niche zone)"
+        )
 
     return (len(violations) == 0, violations)
 
@@ -160,13 +225,137 @@ def validate_tags(
     if len(lower_tags) != len(set(lower_tags)):
         violations.append("Duplicate tags detected")
 
-    # 5. Tag already present as a single word in the title (wasted slot)
+    # 5. Tag phrase already in the title (wasted slot). Compares the whole phrase
+    #    against the whole title — the old title.split() form only caught
+    #    single-word tags, so "Sterling Silver" and "Key of Life" slipped through.
     if title:
-        title_words = {w.lower() for w in title.split()}
         for tag in tags:
-            if tag.lower() in title_words:
+            if _contains_phrase(title, tag):
                 violations.append(
-                    f"Tag '{tag}' is a single word already in title (wasted slot)"
+                    f"Tag '{tag}' already appears in the title (wasted slot)"
+                )
+
+    # 6. Broad-tag ceiling (guide §3: 1-2 "büyük tek" only — more inflates ads)
+    broad = [t for t in tags if t.strip().lower() in BROAD_TAG_TERMS]
+    if len(broad) > TAG_MAX_BROAD:
+        violations.append(
+            f"{len(broad)} broad tags (max {TAG_MAX_BROAD}): {sorted(broad)}"
+        )
+
+    # 7. Long-tail floor (guide §3: 8-9 niche tags; "long-tail tag'ler altın").
+    #    Single-word tags rank poorly and are never long-tail.
+    niche = [
+        t for t in tags
+        if len(t.split()) > 1 and t.strip().lower() not in BROAD_TAG_TERMS
+    ]
+    if len(niche) < TAG_MIN_NICHE:
+        single_word = sorted(t for t in tags if len(t.split()) == 1)
+        detail = f"; single-word tags: {single_word}" if single_word else ""
+        violations.append(
+            f"Only {len(niche)} long-tail niche tags (min {TAG_MIN_NICHE}){detail}"
+        )
+
+    return (len(violations) == 0, violations)
+
+
+def normalize_tags(tags: list[str], title: str = "") -> tuple[list[str], list[str]]:
+    """
+    Auto-fix the mechanical tag problems — the ones with exactly one right answer.
+
+    * Title-case each word (guide §3: "Her kelimenin ilk harfi büyük"), keeping
+      literals like ``925``, ``14K`` and ``CZ`` intact.
+    * Drop tags whose phrase already appears in *title* (a wasted slot).
+    * Drop case-insensitive duplicates, preserving first-seen order.
+
+    Returns ``(cleaned_tags, notes)``. Callers are expected to backfill the freed
+    slots from their candidate pool; judgment calls (broad-tag overage, material
+    contradictions) are deliberately left to ``validate_tags`` instead.
+    """
+    cleaned: list[str] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+
+    for tag in tags:
+        tag = tag.strip()
+        if not tag:
+            continue
+
+        cased = " ".join(
+            _case_tag_word(w, is_first=(i == 0))
+            for i, w in enumerate(tag.split())
+        )
+        if cased != tag:
+            notes.append(f"Re-cased '{tag}' -> '{cased}'")
+
+        key = cased.lower()
+        if key in seen:
+            notes.append(f"Dropped duplicate tag '{cased}'")
+            continue
+        if title and _contains_phrase(title, cased):
+            notes.append(f"Dropped '{cased}' — already in title (wasted slot)")
+            continue
+
+        seen.add(key)
+        cleaned.append(cased)
+
+    return cleaned, notes
+
+
+def validate_material_coherence(title: str, tags: list[str]) -> tuple[bool, list[str]]:
+    """
+    Guide §15: one material story per listing.
+
+    A title claiming sterling silver while the tags advertise 14K gold plating
+    sends Etsy contradictory attribute signals. Returns ``(is_valid, violations)``.
+    """
+    title_claims = {
+        family for family, terms in MATERIAL_CLAIM_TERMS.items()
+        if any(_contains_phrase(title, term) for term in terms)
+    }
+    if not title_claims:
+        return (True, [])
+
+    violations: list[str] = []
+    for family, terms in MATERIAL_CLAIM_TERMS.items():
+        if family in title_claims:
+            continue
+        offenders = sorted(
+            {tag for tag in tags for term in terms if _contains_phrase(tag, term)}
+        )
+        if offenders:
+            violations.append(
+                f"Title claims {sorted(title_claims)} but tags claim "
+                f"'{family}': {offenders}"
+            )
+
+    return (len(violations) == 0, violations)
+
+
+def validate_variant_divergence(
+    variant_tags: dict[str, list[str]]
+) -> tuple[bool, list[str]]:
+    """
+    Guide §14: the three variants exist to cast three different keyword nets.
+
+    Flags any pair whose tag sets overlap beyond ``VARIANT_MAX_TAG_OVERLAP``
+    (Jaccard). ``variant_tags`` maps variant id -> its 13 tags.
+    """
+    violations: list[str] = []
+    ids = sorted(variant_tags)
+
+    for i, left in enumerate(ids):
+        for right in ids[i + 1:]:
+            a = {t.strip().lower() for t in variant_tags[left]}
+            b = {t.strip().lower() for t in variant_tags[right]}
+            union = a | b
+            if not union:
+                continue
+            shared = a & b
+            overlap = len(shared) / len(union)
+            if overlap > VARIANT_MAX_TAG_OVERLAP:
+                violations.append(
+                    f"Variants {left}/{right} share {len(shared)} tags "
+                    f"(overlap {overlap:.0%}, max {VARIANT_MAX_TAG_OVERLAP:.0%})"
                 )
 
     return (len(violations) == 0, violations)

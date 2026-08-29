@@ -23,6 +23,21 @@
     .cliche-item { background: #fff3cd; border-left: 3px solid #ffc107; padding: 4px 10px; margin-bottom: 4px; border-radius: 0 4px 4px 0; font-size: .85rem; }
     .underused-item { background: #d1e7dd; border-left: 3px solid #198754; padding: 4px 10px; margin-bottom: 4px; border-radius: 0 4px 4px 0; font-size: .85rem; }
     .pattern-card { background: #fff; border: 1px solid #dee2e6; border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; font-family: monospace; font-size: .85rem; }
+    /* Products-list row thumbnail + its hover preview. The preview is a single
+       fixed-position node on <body> rather than a scaled-up copy in the cell:
+       the table sits in .table-responsive (overflow-x:auto), which per spec also
+       computes overflow-y to auto, so an in-cell preview would be clipped on the
+       first and last rows — exactly where it is most needed. */
+    .product-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #dee2e6; background: #fff; cursor: pointer; }
+    .product-thumb-empty { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px dashed #dee2e6; background: #fff; opacity: .45; }
+    .thumb-preview {
+      position: fixed; z-index: 1080; width: 320px; height: 320px; object-fit: contain;
+      background: #fff; border: 1px solid #dee2e6; border-radius: 10px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.22); padding: 6px;
+      pointer-events: none;            /* never steals the hover from the row */
+      opacity: 0; visibility: hidden; transition: opacity .12s ease;
+    }
+    .thumb-preview.visible { opacity: 1; visibility: visible; }
   </style>
 </head>
 <body>

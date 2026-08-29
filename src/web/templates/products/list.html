@@ -30,10 +30,12 @@
     <table class="table table-hover align-middle mb-0">
       <thead class="table-light">
         <tr>
+          <th style="width:60px;"></th>
           <th>SKU</th>
+          <th>Rexven SKU</th>
+          <th>Target keyword</th>
           <th>Carrier Pillar</th>
           <th>Material</th>
-          <th>Color</th>
           <th>Status</th>
           <th class="text-end">Cost</th>
           <th class="text-end">Selling Price</th>
@@ -44,10 +46,21 @@
       <tbody>
         {% for product in products %}
         <tr style="cursor:pointer;" onclick="location.href='/products/{{ product.sku }}'">
+          <td>
+            {% if thumbs.get(product.sku) %}
+            <img class="product-thumb" src="{{ thumbs[product.sku] }}" loading="lazy"
+                 alt="{{ product.sku }}">
+            {% else %}
+            <span class="product-thumb-empty" title="No image yet">💍</span>
+            {% endif %}
+          </td>
           <td><code class="fw-semibold text-dark">{{ product.sku }}</code></td>
+          <td><code class="text-muted">{{ product.rexven_sku or '—' }}</code></td>
+          <td class="small" title="{{ product.target_keyword or '' }}">
+            {{ product.target_keyword | truncate(38) if product.target_keyword else '—' }}
+          </td>
           <td>{{ product.carrier_pillar | replace('_', ' ') | title }}</td>
           <td>{{ product.material or '—' }}</td>
-          <td>{{ product.color or '—' }}</td>
           <td>
             <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }}">
               {{ status_labels.get(product.status, product.status) }}
@@ -90,4 +103,48 @@
 </div>
 
 {% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// Enlarged thumbnail preview. Rendered into one fixed-position node on <body>
+// rather than scaling the cell's own <img>: the table's .table-responsive
+// wrapper clips in both axes, which would cut the preview off on the first and
+// last rows. Shares the thumbnail's src, so the browser serves it from cache.
+(function () {
+  const thumbs = document.querySelectorAll('img.product-thumb');
+  if (!thumbs.length) return;
+
+  const SIZE = 320, PAD = 16;
+  const preview = document.createElement('img');
+  preview.className = 'thumb-preview';
+  preview.alt = '';
+  document.body.appendChild(preview);
+
+  function place(e) {
+    // Flip to the cursor's left near the right edge, and clamp vertically so the
+    // preview never runs off the top or bottom of the viewport.
+    let x = e.clientX + PAD;
+    if (x + SIZE + PAD > window.innerWidth) x = e.clientX - PAD - SIZE;
+    const y = Math.max(
+      PAD, Math.min(e.clientY - SIZE / 2, window.innerHeight - SIZE - PAD)
+    );
+    preview.style.left = Math.max(PAD, x) + 'px';
+    preview.style.top = y + 'px';
+  }
+
+  thumbs.forEach((thumb) => {
+    thumb.addEventListener('mouseenter', (e) => {
+      preview.src = thumb.src;
+      preview.classList.add('visible');
+      place(e);
+    });
+    thumb.addEventListener('mousemove', place);
+    thumb.addEventListener('mouseleave', () => {
+      preview.classList.remove('visible');
+      preview.removeAttribute('src');
+    });
+  });
+})();
+</script>
 {% endblock %}

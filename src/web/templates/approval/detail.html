@@ -9,7 +9,9 @@
     <a href="/approval" class="text-muted text-decoration-none small">← Approval Queue</a>
     <h2 class="mb-0 mt-1 d-flex align-items-center gap-2">
       <code>{{ product.sku }}</code>
-      <span class="badge bg-warning text-dark fw-normal fs-6">Awaiting Approval</span>
+      <span class="badge bg-{{ status_badge_class.get(product.status|lower, 'secondary') }} {% if product.status|lower == 'awaiting_approval' %}text-dark{% endif %} fw-normal fs-6">
+        {{ status_labels.get(product.status|lower, product.status) }}
+      </span>
     </h2>
     <p class="text-muted mb-0">
       {{ product.carrier_pillar | replace('_', ' ') | title }}
@@ -22,12 +24,34 @@
 <!-- Hidden overrides accumulator -->
 <input type="hidden" id="overrides-store" value="[]">
 
+{% if product.status|lower in ('approved', 'published') %}
+<!-- ── Archived listing: variants stay browsable after approve/publish ─────── -->
+<div class="alert alert-success d-flex align-items-center gap-2 py-2 px-3 small mb-3 flex-wrap" role="note">
+  <span aria-hidden="true">✅</span>
+  <span>
+    {% if product.status|lower == 'published' %}
+      Published as {{ (product.published_variant_ids or []) | length }} listing(s):
+      <strong>{{ (product.published_variant_ids or []) | join(', ') }}</strong>.
+    {% else %}
+      Approved — selected variant <strong>{{ product.selected_variant_id or '—' }}</strong>
+      {% if product.approved_at %} on {{ product.approved_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}.
+    {% endif %}
+    All variants below stay available; you can still publish another one.
+  </span>
+  {% if product.published_variant_ids %}
+  <a href="/approval/{{ product.sku }}/copy-paste-helper" class="btn btn-sm btn-success ms-auto">
+    📋 Copy-Paste Helper
+  </a>
+  {% endif %}
+</div>
+{% else %}
 <!-- ── Multi-publish guidance ──────────────────────────────────────────────── -->
 <div class="alert alert-info d-flex align-items-start gap-2 py-2 px-3 small mb-3" role="note">
   <span aria-hidden="true">💡</span>
   <span>Trainer recommends publishing all 3 variants as separate listings — same
     photos, different titles/tags. See which one Etsy's algorithm favors.</span>
 </div>
+{% endif %}
 
 <!-- ── 3-Column Variant Grid ───────────────────────────────────────────────── -->
 <form id="approve-form" method="post" action="/approval/{{ product.sku }}/approve">
@@ -79,10 +103,18 @@
           <div>
             <div class="d-flex justify-content-between align-items-center mb-1">
               <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Title</label>
-              <span class="badge bg-light text-dark border title-char-count" id="title-count-{{ vid }}">
-                {{ v.get('title', '') | length }} chars
+              <span class="d-flex align-items-center gap-1">
+                <span class="badge bg-light text-dark border title-char-count" id="title-count-{{ vid }}">
+                  {{ v.get('title', '') | length }} chars
+                </span>
+                {% if vid != 'HYBRID' %}
+                <button type="button" class="btn btn-link btn-sm p-0 regen-btn"
+                        data-field="title" data-variant="{{ vid }}"
+                        title="Regenerate this title (1 LLM call)">↻</button>
+                {% endif %}
               </span>
             </div>
+            <div class="regen-note small text-muted mb-1" id="title-note-{{ vid }}"></div>
             <div class="field-violations small text-danger mb-1" id="title-violations-{{ vid }}"></div>
             <div contenteditable="true"
                  class="editable-field border rounded p-2 small"
@@ -96,10 +128,18 @@
           <div>
             <div class="d-flex justify-content-between align-items-center mb-1">
               <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Tags</label>
-              <span class="badge bg-light text-dark border" id="tags-count-{{ vid }}">
-                {{ v.get('tags', []) | length }}/13
+              <span class="d-flex align-items-center gap-1">
+                <span class="badge bg-light text-dark border" id="tags-count-{{ vid }}">
+                  {{ v.get('tags', []) | length }}/13
+                </span>
+                {% if vid != 'HYBRID' %}
+                <button type="button" class="btn btn-link btn-sm p-0 regen-btn"
+                        data-field="tags" data-variant="{{ vid }}"
+                        title="Regenerate these 13 tags (1 LLM call)">↻</button>
+                {% endif %}
               </span>
             </div>
+            <div class="regen-note small text-muted mb-1" id="tags-note-{{ vid }}"></div>
             <div class="field-violations small text-danger mb-1" id="tags-violations-{{ vid }}"></div>
             <div class="tags-display mb-1" id="tags-display-{{ vid }}">
               {% for tag in v.get('tags', []) %}
@@ -118,10 +158,18 @@
           <div class="flex-grow-1">
             <div class="d-flex justify-content-between align-items-center mb-1">
               <label class="fw-semibold small text-uppercase text-muted" style="letter-spacing:.05em;">Description</label>
-              <span class="badge bg-light text-dark border" id="desc-count-{{ vid }}">
-                {{ v.get('description', '').split() | length }} words
+              <span class="d-flex align-items-center gap-1">
+                <span class="badge bg-light text-dark border" id="desc-count-{{ vid }}">
+                  {{ v.get('description', '').split() | length }} words
+                </span>
+                {% if vid != 'HYBRID' %}
+                <button type="button" class="btn btn-link btn-sm p-0 regen-btn"
+                        data-field="description" data-variant="{{ vid }}"
+                        title="Regenerate this description (1 LLM call)">↻</button>
+                {% endif %}
               </span>
             </div>
+            <div class="regen-note small text-muted mb-1" id="desc-note-{{ vid }}"></div>
             <div class="field-violations small text-danger mb-1" id="desc-violations-{{ vid }}"></div>
             <textarea class="form-control form-control-sm editable-field"
                       data-field="description"
@@ -285,10 +333,16 @@
         💾 Save as draft
       </button>
 
+      {% if product.status|lower == 'awaiting_approval' %}
       <button type="button" class="btn btn-outline-danger ms-auto"
               data-bs-toggle="modal" data-bs-target="#rejectModal">
         ✗ Reject all &amp; regenerate
       </button>
+      {% else %}
+      {# Reject clears generated_variants for good — keep it off already-approved
+         listings so the archive can't be destroyed by a stray click. #}
+      <span class="text-muted small ms-auto">Variants are archived and kept for this listing.</span>
+      {% endif %}
 
     </div>
   </div>
@@ -435,6 +489,9 @@
   .variant-card.selected { border-color: #ffc107 !important; box-shadow: 0 0 0 .2rem rgba(255,193,7,.25); }
   .editable-field:focus { outline: 2px solid #ffc10780; border-color: #ffc107; }
   .field-violations:empty { display: none; }
+  .regen-note:empty { display: none; }
+  .regen-btn { line-height: 1; text-decoration: none; font-size: .95rem; }
+  .regen-btn:disabled { opacity: .5; }
   .save-indicator { font-size:.7rem; color:#198754; }
   .save-error { font-size:.7rem; color:#dc3545; }
   .hybrid-field-row { border-bottom: 1px solid #dee2e6; padding: 8px 0; }
@@ -532,6 +589,76 @@ function showViolations(variantId, field, violations) {
     el.innerHTML = '';
   }
 }
+
+// ── Per-field regeneration (POST) ─────────────────────────────────────────────
+// One field of one variant = one LLM call, so this runs inline with a spinner
+// instead of the background-task + progress-page flow the full pipeline uses.
+function setFieldValue(variantId, field, value) {
+  const el = document.getElementById(
+    (field === 'description' ? 'description' : field) + '-' + variantId
+  );
+  if (!el) return;
+  if (field === 'tags') {
+    el.value = (value || []).join(', ');
+  } else if (el.tagName === 'TEXTAREA') {
+    el.value = value || '';
+  } else {
+    el.innerText = value || '';
+  }
+}
+
+function showRegenNote(variantId, field, notes) {
+  const mapping = { title: 'title', tags: 'tags', description: 'desc' };
+  const el = document.getElementById(mapping[field] + '-note-' + variantId);
+  if (!el) return;
+  el.innerHTML = (notes && notes.length)
+    ? notes.map(n => `↻ ${n}`).join('<br>')
+    : '';
+}
+
+async function regenerateField(btn) {
+  const variantId = btn.dataset.variant;
+  const field = btn.dataset.field;
+  const original = btn.textContent;
+
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  showRegenNote(variantId, field, []);
+
+  try {
+    const resp = await fetch(`/approval/${SKU}/variant/${variantId}/regenerate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ field }),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      showRegenNote(variantId, field, [data.error || 'Regeneration failed']);
+      return;
+    }
+
+    // A title regen can also return cleaned-up tags, so apply every field the
+    // server actually changed — not just the one that was clicked.
+    Object.entries(data.updates || {}).forEach(([name, value]) => {
+      if (name === 'estimated_ctr_signal') return;
+      setFieldValue(variantId, name, value);
+    });
+    updateCounts(variantId);
+    showViolations(variantId, field, data.violations || []);
+    showRegenNote(variantId, field, data.notes || []);
+  } catch (e) {
+    showRegenNote(variantId, field, [`Network error: ${e.message}`]);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+document.querySelectorAll('.regen-btn').forEach(btn => {
+  btn.addEventListener('click', () => regenerateField(btn));
+});
+
 
 document.querySelectorAll('.editable-field').forEach(el => {
   const variantId = el.dataset.variant;

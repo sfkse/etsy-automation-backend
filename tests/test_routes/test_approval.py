@@ -1,4 +1,5 @@
-"""Tests for the multi-listing publish flow (POST /approval/{sku}/publish).
+"""Tests for the multi-listing publish flow (POST /approval/{sku}/publish) and
+the queue's batch (?skus=) filter.
 
 Uses a minimal FastAPI app that mounts only the approval router — avoids the
 main app's lifespan (scheduler + shop-defaults seed). The session is a MagicMock
@@ -10,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
 from src.db.dependencies import get_session
@@ -111,3 +113,75 @@ def test_publish_with_no_valid_variants_bounces_back():
     assert resp.headers["location"] == "/approval/TAKI-0042"
     assert product.published_variant_ids == []
     assert product.status == ProductStatus.AWAITING_APPROVAL.value
+
+
+# ── Queue: batch (?skus=) filter ──────────────────────────────────────────────
+
+
+def _queue_client(monkeypatch) -> tuple[TestClient, dict]:
+    """Client for GET /approval that records what the route asked the service
+    for. The queue's real work is the query it builds, so the service call and
+    the template render are both stubbed out.
+    """
+    captured: dict = {}
+
+    def fake_queue(session, sort="newest", status_filter="pending", skus=None):
+        captured["sort"] = sort
+        captured["status_filter"] = status_filter
+        captured["skus"] = skus
+        return []
+
+    monkeypatch.setattr(approval_routes, "get_approval_queue", fake_queue)
+    monkeypatch.setattr(
+        approval_routes,
+        "_tmpl",
+        lambda name, request, context, **kw: HTMLResponse(""),
+    )
+
+    client, _session = _client(None)
+    return client, captured
+
+
+def test_queue_skus_filter_scopes_to_batch_and_defaults_to_all(monkeypatch):
+    client, captured = _queue_client(monkeypatch)
+
+    assert client.get("/approval?skus=TAKI-0003,TAKI-0004").status_code == 200
+
+    assert captured["skus"] == ["TAKI-0003", "TAKI-0004"]
+    # A batch mixes awaiting-approval and already-approved rows, so the usual
+    # "pending" default would hide half of what was just built.
+    assert captured["status_filter"] == "all"
+
+
+def test_queue_skus_filter_ignores_blanks_and_whitespace(monkeypatch):
+    client, captured = _queue_client(monkeypatch)
+
+    assert client.get("/approval?skus=TAKI-0003,,%20TAKI-0004%20,").status_code == 200
+
+    assert captured["skus"] == ["TAKI-0003", "TAKI-0004"]
+
+
+def test_queue_without_skus_still_defaults_to_pending(monkeypatch):
+    client, captured = _queue_client(monkeypatch)
+
+    assert client.get("/approval").status_code == 200
+
+    assert captured["skus"] == []
+    assert captured["status_filter"] == "pending"
+
+
+def test_queue_explicit_status_wins_over_skus_default(monkeypatch):
+    client, captured = _queue_client(monkeypatch)
+
+    assert client.get("/approval?skus=TAKI-0003&status=pending").status_code == 200
+
+    assert captured["skus"] == ["TAKI-0003"]
+    assert captured["status_filter"] == "pending"
+
+
+def test_variants_json_mirror_is_gone():
+    """The extension no longer reviews inline — the web app owns review, and the
+    JSON mirror that existed only to feed the side panel is retired."""
+    client, _session = _client(_product())
+
+    assert client.get("/approval/TAKI-0042/variants").status_code == 404

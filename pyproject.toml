@@ -7,69 +7,79 @@ name = "etsy-jewelry-automation"
 version = "0.1.0"
 description = "Local-only Etsy jewelry store automation system"
 requires-python = ">=3.11"
+# Upper bounds cap each dependency below its next major version. Without them a
+# `docker compose build` months from now silently resolves to whatever is newest
+# and can break at runtime — which is exactly how anthropic 1.0 landed here and
+# removed `temperature` from messages.create(). Each ceiling below sits one major
+# above a version the suite has actually passed on, so bumping one is a
+# deliberate act: raise the bound, rebuild, run the tests.
 dependencies = [
     # Web framework
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
-    "jinja2>=3.1.4",
-    "python-multipart>=0.0.9",
+    "fastapi>=0.115.0,<1.0",
+    "uvicorn[standard]>=0.30.0,<1.0",
+    "jinja2>=3.1.4,<4.0",
+    "python-multipart>=0.0.9,<1.0",
 
     # Config & validation
-    "pydantic>=2.7.0",
-    "pydantic-settings>=2.3.0",
-    "python-dotenv>=1.0.1",
+    "pydantic>=2.7.0,<3.0",
+    "pydantic-settings>=2.3.0,<3.0",
+    "python-dotenv>=1.0.1,<2.0",
 
     # Database
-    "sqlalchemy[asyncio]>=2.0.36",
-    "alembic>=1.13.2",
-    "psycopg[binary]>=3.2.1",
+    "sqlalchemy[asyncio]>=2.0.36,<3.0",
+    "alembic>=1.13.2,<2.0",
+    "psycopg[binary]>=3.2.1,<4.0",
 
     # Logging
-    "structlog>=24.4.0",
+    "structlog>=24.4.0,<27.0",
 
     # AI providers
-    "anthropic>=0.34.0",
-    "google-generativeai>=0.8.0",
-    "google-genai>=1.0.0",
-    "openai>=1.52.0",
+    # anthropic 1.0 dropped temperature/top_p from messages.create(); the client
+    # in src/utils/llm_client.py passes neither, so 0.x and 1.x both work.
+    "anthropic>=0.34.0,<2.0",
+    "google-generativeai>=0.8.0,<1.0",
+    "google-genai>=1.0.0,<3.0",
+    "openai>=1.52.0,<4.0",
 
     # Embeddings
-    "sentence-transformers>=3.1.0",
+    "sentence-transformers>=3.1.0,<7.0",
 
     # HTTP
-    "httpx>=0.27.2",
+    "httpx>=0.27.2,<1.0",
 
     # HTML parsing (Phase 4 — Rexven/Etsy scraping)
-    "beautifulsoup4>=4.12.0",
+    "beautifulsoup4>=4.12.0,<5.0",
 
     # Encryption (Etsy token storage)
-    "cryptography>=42.0.0",
+    "cryptography>=42.0.0,<51.0",
 
     # Data processing
-    "pandas>=2.2.0",
+    "pandas>=2.2.0,<4.0",
 
     # Image processing (Phase 5)
-    "Pillow>=10.4.0",
-    "rembg>=2.0.57",
+    "Pillow>=10.4.0,<13.0",
+    "rembg>=2.0.57,<3.0",
     # rembg imports onnxruntime lazily but errors at import time if missing; pin
     # explicitly so fresh venvs don't ImportError inside run_image_pipeline.
-    "onnxruntime>=1.17.0",
+    "onnxruntime>=1.17.0,<2.0",
 
     # Scheduling (Phase 9)
-    "apscheduler>=3.10.4",
-    "pytz>=2024.1",
+    # apscheduler 4.x is a ground-up rewrite with a different API — the <4.0 cap
+    # is load-bearing, not routine.
+    "apscheduler>=3.10.4,<4.0",
+    "pytz>=2024.1",  # calendar-versioned, no majors to guard against
 
     # Google Sheets sync (Phase 10)
-    "google-api-python-client>=2.140.0",
-    "google-auth-httplib2>=0.2.0",
-    "google-auth-oauthlib>=1.2.0",
+    "google-api-python-client>=2.140.0,<3.0",
+    "google-auth-httplib2>=0.2.0,<1.0",
+    "google-auth-oauthlib>=1.2.0,<2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "httpx>=0.27.2",
+    "pytest>=8.3.0,<10.0",
+    "pytest-asyncio>=0.24.0,<2.0",
+    "httpx>=0.27.2,<1.0",
 ]
 
 [tool.setuptools.packages.find]

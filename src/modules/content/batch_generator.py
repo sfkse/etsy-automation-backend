@@ -19,16 +19,20 @@ import structlog
 from src.config.prompts import BATCH_VARIANT_PROMPT
 from src.config.settings import Settings
 from src.db.models import Product
-from src.domain.validators import validate_tags, validate_title
+from src.domain.validators import (
+    normalize_tags,
+    validate_material_coherence,
+    validate_tags,
+    validate_title,
+    validate_variant_divergence,
+)
 from src.modules.content.description_generator import _product_summary
+from src.modules.content.title_generator import _pad_to_band
 from src.modules.llm.angles import VariantAngle
 from src.modules.research.context_builder import ResearchContextBuilder
 from src.utils.llm_client import LLMClient
 
 _log = structlog.get_logger(__name__)
-
-# Cross-variant tag overlap above this fraction is a soft rule — logged, not raised.
-_MAX_TAG_OVERLAP = 0.50
 
 
 class BatchGenerationError(Exception):
@@ -135,10 +139,26 @@ class BatchTitleTagGenerator:
                     f"variant {letter} missing or malformed"
                 ) from exc
 
+            # Auto-fix what can be fixed without a candidate pool: pad the title
+            # into the length band, and re-case / de-duplicate the tags. The
+            # title is deliberately NOT passed to normalize_tags — dropping a
+            # title-duplicate tag here would leave fewer than TAG_COUNT with
+            # nothing to backfill from. Those stay violations, which rejects the
+            # batch and hands off to the per-variant path, which does backfill.
+            title = _pad_to_band(title)
+            tags, notes = normalize_tags(tags)
+            if notes:
+                _log.info("batch_tags_normalized", variant=letter, fixes=notes)
+
             title_ok, title_violations = validate_title(
                 title, target_keyword=product.target_keyword
             )
             tags_ok, tag_violations = validate_tags(tags, title)
+
+            mat_ok, mat_violations = validate_material_coherence(title, tags)
+            tags_ok = tags_ok and mat_ok
+            tag_violations = tag_violations + mat_violations
+
             if not title_ok or not tags_ok:
                 _log.warning(
                     "batch_variant_failed_validation",
@@ -153,21 +173,13 @@ class BatchTitleTagGenerator:
 
     @staticmethod
     def _check_cross_variant_overlap(validated: dict) -> None:
-        """Soft rule: warn (never raise) when two variants share too many tags."""
-        letters = list(validated.keys())
-        for i in range(len(letters)):
-            for j in range(i + 1, len(letters)):
-                a, b = letters[i], letters[j]
-                set_a = {t.lower() for t in validated[a]["tags"]}
-                set_b = {t.lower() for t in validated[b]["tags"]}
-                if not set_a or not set_b:
-                    continue
-                overlap = len(set_a & set_b) / min(len(set_a), len(set_b))
-                if overlap > _MAX_TAG_OVERLAP:
-                    _log.warning(
-                        "batch_variant_high_overlap",
-                        variant_a=a,
-                        variant_b=b,
-                        overlap=f"{overlap:.0%}",
-                        shared=sorted(set_a & set_b),
-                    )
+        """Soft rule: warn (never raise) when two variants share too many tags.
+
+        Uses the shared ``validate_variant_divergence`` so the batch path and the
+        approval screen agree on the threshold (guide §14).
+        """
+        ok, violations = validate_variant_divergence(
+            {letter: data["tags"] for letter, data in validated.items()}
+        )
+        if not ok:
+            _log.warning("batch_variant_high_overlap", violations=violations)

@@ -1,0 +1,39 @@
+# ─── Virtualenv (1.5GB — never send as build context) ─────────────────────────
+.venv/
+venv/
+env/
+
+# ─── VCS / tooling ────────────────────────────────────────────────────────────
+.git/
+.gitignore
+.codegraph/
+.cursorrules
+**/.pytest_cache/
+.idea/
+.vscode/
+**/.DS_Store
+
+# ─── Secrets (injected via compose env_file at runtime) ───────────────────────
+.env
+
+# ─── Runtime data (bind-mounted at runtime) ───────────────────────────────────
+data/
+
+# ─── Python build artifacts ───────────────────────────────────────────────────
+# The ** prefix matters: bare "__pycache__/" only matches at the context root,
+# which lets stale host-compiled .pyc files leak into the image.
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+dist/
+build/
+.eggs/
+
+# ─── Docs / prose ─────────────────────────────────────────────────────────────
+docs/
+*.md
+
+# ─── Docker itself ────────────────────────────────────────────────────────────
+Dockerfile
+.dockerignore
+docker-compose.yml

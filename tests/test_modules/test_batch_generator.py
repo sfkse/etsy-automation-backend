@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.config import business_rules as br
 from src.modules.content.batch_generator import (
     BatchGenerationError,
     BatchTitleTagGenerator,
@@ -36,23 +37,27 @@ TAGS_A = [
     "everyday jewelry",
 ]
 # Distinct from A and C — used for the clean happy path (no overlap warning).
+# "sideways cross" / "choker necklace" were dropped: both appear verbatim in
+# TITLE_B, which the phrase-based wasted-slot check now catches.
 TAGS_B = [
-    "sideways cross", "silver charm", "choker necklace", "baptism keepsake",
+    "angled cross", "silver charm", "slim collar chain", "baptism keepsake",
     "tiny pendant", "faith symbol", "communion gift", "delicate chain",
-    "boho jewelry", "unisex necklace", "spiritual gift", "modern cross",
+    "boho jewelry", "unisex jewelry", "spiritual gift", "modern cross",
     "everyday charm",
 ]
+# At most TAG_MAX_BROAD broad tags (guide §3) — this angle is gift-focused, so
+# it spends both of its broad slots and takes the rest long-tail.
 TAGS_C = [
-    "gift for mom", "gift for her", "birthday present", "gift for daughter",
-    "christian gift", "faith necklace", "cross jewelry", "present for wife",
-    "grandma gift", "sister gift", "religious charm", "holiday gift",
-    "stocking stuffer",
+    "gift for mom", "gift for her", "christian gift", "faith necklace",
+    "cross jewelry", "present for wife", "grandma gift", "sister gift",
+    "religious charm", "stocking stuffer", "keepsake present",
+    "believer jewelry", "devotion charm",
 ]
 # Deliberately ~69% overlap with TAGS_A (valid tags, but too similar) —
 # used only for the soft cross-variant-overlap warning test.
 TAGS_B_OVERLAP = [
-    "sideways cross", "silver faith", "baptism keepsake", "confirmation gift",
-    "christian charm", "layered chain", "dainty necklace", "choker necklace",
+    "angled cross", "muted silver", "baptism keepsake", "confirmation gift",
+    "christian charm", "layered chain", "dainty necklace", "collar necklace",
     "faith jewelry", "religious gift", "tiny cross", "everyday jewelry",
     "minimalist gift",
 ]
@@ -101,15 +106,18 @@ async def test_success_returns_three_variants():
     result = await gen.generate_all(_product(), _angles())
 
     assert set(result.keys()) == {"A", "B", "C"}
-    assert result["A"]["title"] == TITLE_A
-    assert result["B"]["tags"] == TAGS_B
+    # Titles are padded into the 137-140 band, so the original is a prefix.
+    assert result["A"]["title"].startswith(TITLE_A)
+    assert br.TITLE_MIN_LENGTH <= len(result["A"]["title"]) <= br.TITLE_MAX_LENGTH
+    # Tags come back title-cased ("cross pendant" -> "Cross Pendant").
+    assert result["B"]["tags"] == [t.title() for t in TAGS_B]
     assert all(len(result[k]["tags"]) == 13 for k in ("A", "B", "C"))
 
 
 async def test_strips_markdown_fence():
     gen = _generator("```json\n" + _payload() + "\n```")
     result = await gen.generate_all(_product(), _angles())
-    assert result["C"]["title"] == TITLE_C
+    assert result["C"]["title"].startswith(TITLE_C)
 
 
 async def test_malformed_json_raises():

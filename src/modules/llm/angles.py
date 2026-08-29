@@ -14,6 +14,7 @@ and tags them with variant_letter "A" / "B" / "C".
 """
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass, field
 
 
@@ -179,3 +180,37 @@ ANGLE_PREMIUM = VariantAngle(
     ),
     short_rationale="Positions as premium / fine jewelry to justify higher price point.",
 )
+
+
+# ── Lookup by label ───────────────────────────────────────────────────────────
+
+ALL_ANGLES: list[VariantAngle] = [
+    ANGLE_CONSERVATIVE,
+    ANGLE_DIFFERENTIATED,
+    ANGLE_GIFT_FOCUSED,
+    ANGLE_HOLIDAY,
+    ANGLE_VALENTINES,
+    ANGLE_MOTHERS_DAY,
+    ANGLE_PREMIUM,
+]
+
+
+def angle_for_label(label: str, variant_letter: str = "A") -> VariantAngle | None:
+    """Recover the angle a stored variant was generated with, by its label.
+
+    Regeneration must NOT re-derive the angle the way
+    ``VariantBundleOrchestrator._select_angles_for_niche`` does: that picks slot
+    C by the current month (Holiday / Valentines / Mother's Day), so
+    regenerating a variant in a different season would silently swap its
+    strategy. The stored ``strategy_label`` is the stable record of what the
+    variant actually is, so we match on it.
+
+    Returns a copy with ``variant_letter`` applied, or None for labels with no
+    angle behind them (notably the user-composed "HYBRID" variant).
+    """
+    for angle in ALL_ANGLES:
+        if angle.label == label:
+            restored = copy(angle)
+            restored.variant_letter = variant_letter
+            return restored
+    return None

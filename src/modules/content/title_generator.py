@@ -7,9 +7,17 @@ Retries once with a relaxed prompt if all candidates fail validation.
 """
 from __future__ import annotations
 
+import re
+from collections import Counter
+
 import structlog
 
-from src.config.business_rules import TITLE_MAX_LENGTH, TITLE_MIN_LENGTH
+from src.config.business_rules import (
+    TITLE_MAX_LENGTH,
+    TITLE_MIN_LENGTH,
+    TITLE_PADDING_PHRASES,
+    TITLE_SEPARATOR,
+)
 from src.config.prompts import (
     TITLE_DYNAMIC_TEMPLATE,
     TITLE_STATIC_PREFIX,
@@ -23,6 +31,12 @@ from src.utils.llm_client import LLMClient
 
 _log = structlog.get_logger(__name__)
 
+# Mirrors validators._STOP_WORDS — padding phrases like "for Women" must not be
+# rejected just because the title already contains "for".
+_PAD_STOP_WORDS: frozenset[str] = frozenset(
+    {"and", "for", "the", "with", "a", "an", "of", "in", "to", "by", "at"}
+)
+
 
 def _extract_features(product: Product) -> str:
     parts = []
@@ -31,7 +45,11 @@ def _extract_features(product: Product) -> str:
     if product.style:
         parts.append(product.style)
     if product.has_stone and product.stone_type:
-        parts.append(f"{product.stone_type} stone")
+        # The type already names the stone ("Birthstone", "Cubic Zirconia"), so
+        # appending "stone" produced "Birthstone stone" — and FORBIDDEN_TITLE_KEYWORDS
+        # bans the bare word "Stone" in titles ("use CZ or Pave"). Harmless while
+        # nothing set has_stone; the listing-builder flow now does.
+        parts.append(product.stone_type)
     if product.color:
         parts.append(product.color)
     return ", ".join(parts) if parts else "standard"
@@ -68,6 +86,69 @@ def _angle_alignment_score(title: str, angle: VariantAngle) -> float:
     return score
 
 
+def _significant_words(text: str) -> list[str]:
+    return [
+        cleaned
+        for w in text.split()
+        if (cleaned := re.sub(r"[^\w]", "", w).lower())
+        and cleaned not in _PAD_STOP_WORDS
+    ]
+
+
+def _pad_to_band(title: str) -> str:
+    """
+    Lift a short title into the ``TITLE_MIN_LENGTH``-``TITLE_MAX_LENGTH`` band by
+    appending approved phrases, so the model is never asked to count characters.
+
+    Each round picks the *best-fitting* eligible phrase — the longest one that
+    still lands under the cap — rather than walking the list in order, which is
+    what lets a single pass close gaps of very different sizes. A phrase is
+    ineligible if it would push any word to three occurrences (the threshold
+    ``validate_title`` flags) or overflow the cap.
+
+    Returns the title unchanged when it is already in band or cannot be padded;
+    the caller still validates, so padding is never trusted blindly.
+    """
+    title = title.strip().rstrip(",")
+    if len(title) >= TITLE_MIN_LENGTH:
+        return title
+
+    counts = Counter(_significant_words(title))
+    unused = list(TITLE_PADDING_PHRASES)
+
+    while len(title) < TITLE_MIN_LENGTH:
+        best: str | None = None
+        best_words: list[str] = []
+        best_lands_in_band = False
+
+        for phrase in unused:
+            result_len = len(title) + len(TITLE_SEPARATOR) + len(phrase)
+            if result_len > TITLE_MAX_LENGTH:
+                continue
+            words = _significant_words(phrase)
+            # Adding this phrase must not take any word to 3 occurrences.
+            if any(counts[w] + n >= 3 for w, n in Counter(words).items()):
+                continue
+
+            # Prefer a phrase that finishes the job outright. Picking purely by
+            # length strands titles just below the floor: the biggest fitting
+            # phrase can leave a gap too small for any remaining phrase to fill.
+            lands_in_band = result_len >= TITLE_MIN_LENGTH
+            if best is None or (lands_in_band, len(phrase)) > (
+                best_lands_in_band, len(best)
+            ):
+                best, best_words, best_lands_in_band = phrase, words, lands_in_band
+
+        if best is None:
+            break
+
+        title = f"{title}{TITLE_SEPARATOR}{best}"
+        counts.update(best_words)
+        unused.remove(best)
+
+    return title
+
+
 def _too_similar_to_competitors(title: str) -> bool:
     """Placeholder — a full competitor-similarity check would query the DB.
     Currently just checks that the title isn't suspiciously short."""
@@ -97,7 +178,7 @@ class TitleGenerator:
         response = await self.llm.complete(
             prompt=prompt, cached_prefix=TITLE_STATIC_PREFIX, max_tokens=800
         )
-        candidates = self._parse_titles(response)
+        candidates = [_pad_to_band(t) for t in self._parse_titles(response)]
 
         valid = []
         for title in candidates:
@@ -166,14 +247,15 @@ class TitleGenerator:
                 angle.prompt_instructions
                 + f"\n\nCRITICAL: Previous attempt produced titles outside {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars. "
                 "Count characters on each title before writing it. Use padding phrases like "
-                f"'for Women', 'Jewelry Gift', 'Layering Necklace' to reach {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars."
+                + ", ".join(f"'{p}'" for p in TITLE_PADDING_PHRASES[:3])
+                + f" to reach {TITLE_MIN_LENGTH}-{TITLE_MAX_LENGTH} chars."
             ),
         )
 
         response = await self.llm.complete(
             prompt=relaxed_prompt, cached_prefix=TITLE_STATIC_PREFIX, max_tokens=800
         )
-        candidates = self._parse_titles(response)
+        candidates = [_pad_to_band(t) for t in self._parse_titles(response)]
 
         valid = [
             t for t in candidates

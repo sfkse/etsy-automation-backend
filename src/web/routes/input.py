@@ -16,7 +16,7 @@ from pathlib import Path as _DeletePath
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from src.config.settings import Settings
 from src.db.dependencies import get_session
@@ -104,7 +104,9 @@ async def product_list(
     sort: str = "newest",
     session: Session = Depends(get_session),
 ):
-    q = session.query(Product)
+    # Images are eager-loaded for the row thumbnails — the relationship is lazy,
+    # so without this the list fires one extra query per product.
+    q = session.query(Product).options(selectinload(Product.images))
     if sort == "oldest":
         q = q.order_by(Product.created_at.asc())
     elif sort == "sku":
@@ -119,6 +121,7 @@ async def product_list(
         "products/list.html", request,
         {
             "products": products,
+            "thumbs": {p.sku: _thumb_url(p) for p in products},
             "sort": sort,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
@@ -140,6 +143,7 @@ async def product_detail(
             "products/list.html", request,
             {
                 "products": [],
+                "thumbs": {},
                 "sort": "newest",
                 "status_labels": STATUS_LABELS,
                 "status_badge_class": STATUS_BADGE_CLASS,
@@ -404,6 +408,22 @@ def _slot_public_url(file_path: str | None) -> str | None:
     except OSError:
         pass
     return url
+
+
+def _thumb_url(product: Product) -> str | None:
+    """Best available preview photo for a products-list row.
+
+    Prefers the primary photo, then the lowest-ranked one, and falls back to the
+    supplier's original capture — so a row shows something from the moment the
+    extension uploads the Rexven image, long before the AI set exists.
+    """
+    candidates = [i for i in (product.images or []) if i.file_path]
+    chosen = next((i for i in candidates if i.is_selected), None)
+    if chosen is None and candidates:
+        chosen = min(candidates, key=lambda i: (i.rank is None, i.rank or 0))
+    return _slot_public_url(
+        chosen.file_path if chosen else product.original_image_path
+    )
 
 
 @router.get("/{sku}/images", response_class=HTMLResponse)

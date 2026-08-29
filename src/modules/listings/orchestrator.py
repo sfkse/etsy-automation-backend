@@ -28,12 +28,14 @@ from sqlalchemy.orm import Session
 
 from src.db.models import (
     JewelryCategory,
+    KeywordScore,
     MaterialType,
     PersonalizationTemplate,
     Product,
     ProductStatus,
     ShopSection,
     ShopSettings,
+    SourcingAnalysis,
     VariationPreset,
     VariationRow,
 )
@@ -42,6 +44,7 @@ from src.modules.input import generate_sku
 from src.modules.listings.description_engine import DescriptionEngine
 from src.modules.listings.personalization_picker import PersonalizationPicker
 from src.modules.listings.variation_builder import VariationMatrixBuilder
+from src.sourcing.rexven_normalizer import reconcile_preset
 from src.sourcing.rexven_scraper import scrape_rexven_product
 
 _log = structlog.get_logger(__name__)
@@ -57,6 +60,78 @@ _PILLAR_TO_SECTION_NAME: dict[str, str] = {
     "pet": "Pet Memorial Jewelry",
     "pendant": "Pendant Necklace",
 }
+
+
+# Stone vocabulary → the value stored in ``Product.stone_type``. Ordered
+# specific → generic, first match wins, so "birthstone accent ... gemstone
+# center" resolves to Birthstone rather than the generic Gemstone. Same
+# discipline as the extension's PILLAR_HINTS.
+_STONE_HINTS: list[tuple[str, tuple[str, ...]]] = [
+    ("Birthstone", ("birthstone", "birth stone")),
+    ("Cubic Zirconia", ("cubic zirconia", "cz ", " cz", "zirconia")),
+    ("Pearl", ("pearl",)),
+    ("Opal", ("opal",)),
+    ("Crystal", ("crystal",)),
+    ("Gemstone", ("gemstone", "gem stone", "stone", "diamond")),
+]
+
+# Vision fields worth scanning. `theme` and `material` carry the stone on real
+# captures ("Christian cross with birthstone accent" / "Gold-plated brass with
+# blue gemstone center"); `form` occasionally does. `style`, `occasion` and
+# `recipient` are excluded — "birthstone jewelry lover" under recipient would
+# fire on a piece that merely targets that buyer.
+_STONE_FIELDS = ("theme", "material", "form")
+
+
+def _detected_attributes(analysis: "SourcingAnalysis | None") -> Optional[dict]:
+    """Layer A's vision read of the product, off whichever candidate carries it.
+
+    Every candidate of an analysis shares the same blob; the first non-empty one
+    is the whole picture. Mirrors the lookup in ``sourcing._run_layer_c``.
+    """
+    if analysis is None:
+        return None
+    return next(
+        (c.detected_attributes for c in analysis.candidates if c.detected_attributes),
+        None,
+    )
+
+
+def infer_stone(
+    detected: Optional[dict], stone_shape: Optional[str] = None
+) -> tuple[bool, Optional[str]]:
+    """Return ``(has_stone, stone_type)`` for a product.
+
+    Reads Layer A's detected attributes, because the supplier's own spec block
+    does not state the stone. ``stone_shape`` (from the popup) independently
+    proves there is one even when the vision text says nothing nameable, so it
+    can set ``has_stone`` without naming a type.
+    """
+    blob = ""
+    if detected:
+        blob = " ".join(str(detected.get(f, "")) for f in _STONE_FIELDS).lower()
+
+    stone_type: Optional[str] = None
+    if blob:
+        for label, hints in _STONE_HINTS:
+            if any(h in blob for h in hints):
+                stone_type = label
+                break
+
+    return bool(stone_type) or bool(stone_shape), stone_type
+
+
+def _fit(value: Optional[str], limit: int) -> Optional[str]:
+    """Trim a supplier-supplied string to its column width.
+
+    Supplier prose is free-form ("30 Force (cable) Chain"), so a value that fits
+    today may not tomorrow. Truncating beats a 500 at build time for a field that
+    is descriptive rather than load-bearing.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:limit] if text else None
 
 
 class ListingBuildRequest(BaseModel):
@@ -101,6 +176,14 @@ class ListingBuildRequest(BaseModel):
     # user checkpoint.
     deepdive_pending: bool = False
 
+    # How long this build may wait for its deep-dive, in seconds. Deep-dives run
+    # serially in the extension (one scrape window), so in a multi-keyword batch
+    # the Nth keyword's dive only starts once N-1 have finished. The extension
+    # sizes this by queue position; without it every build past the first would
+    # exhaust the default budget waiting for a dive that had not begun. Clamped
+    # server-side by _DEEPDIVE_WAIT_CAP_S.
+    deepdive_wait_s: Optional[int] = None
+
 
 class ListingBuilder:
     """Assemble a listing from a slim per-product request."""
@@ -137,8 +220,37 @@ class ListingBuilder:
             if req.cost_cents_override is None or req.supplier_product_cents == req.cost_cents_override:
                 cost_cents = base_cost_cents + req.supplier_shipping_cents
 
+        # Supplier attributes captured during sourcing (options, spec block).
+        # Looked up rather than re-sent: the analysis behind the chosen keyword
+        # already holds them.
+        supplier = self._load_supplier_capture(req)
+        attributes = (supplier.rexven_attributes if supplier else None) or {}
+        supplier_options = (supplier.rexven_options if supplier else None) or []
+
+        # The supplier states its material outright ("925 Ayar Gümüş" /
+        # "Pirinç (Brass)"), and that choice drives the preset, the Etsy
+        # materials field and the brass/silver description overrides. Prefer it
+        # over the popup dropdown, which is hand-picked and silently wrong on a
+        # mis-click.
+        material_type = attributes.get("material_type") or req.material_type
+
+        # What kind of stone the piece carries, read off Layer A's vision pass.
+        # The supplier's spec block does not state it — REX-936's `rexven_attributes`
+        # holds only care/color/style/packaging/size_info/chain_style — but the
+        # vision model sees it plainly ("Christian cross with birthstone accent").
+        #
+        # Without this, `has_stone`/`stone_type` were never set by this flow, so
+        # `_extract_features` (title) and `_product_summary` (description) both
+        # skipped their stone branch and the word "birthstone" reached the LLM only
+        # when the target keyword happened to contain it. On a listing targeting
+        # "baptism gift cross necklace" that meant the product's differentiating
+        # feature was absent from generation entirely.
+        has_stone, stone_type = infer_stone(
+            _detected_attributes(supplier), req.stone_shape
+        )
+
         preset_name = req.variation_preset_name or self._auto_preset(
-            req.category, req.material_type, req.personalization_choice
+            req.category, material_type, req.personalization_choice
         )
         preset = (
             self.session.query(VariationPreset)
@@ -147,6 +259,8 @@ class ListingBuilder:
         )
         if preset is None:
             raise ValueError(f"Variation preset not found: {preset_name!r}")
+
+        self._log_preset_mismatch(preset, supplier_options, req.rexven_sku)
 
         matrix = self.variation_builder.build(
             preset_name=preset_name,
@@ -162,9 +276,11 @@ class ListingBuilder:
             sku=generate_sku(self.session),
             carrier_pillar=req.carrier_pillar,
             status=ProductStatus.CONTENT_GENERATING.value,
-            material_type=req.material_type,
-            material=self._material_display(req.material_type),
+            material_type=material_type,
+            material=self._material_display(material_type),
             stone_shape=req.stone_shape,
+            has_stone=has_stone,
+            stone_type=stone_type,
             variation_preset_id=preset.id,
             personalization_template_id=personalization.id if personalization else None,
             target_keyword=req.target_keyword,
@@ -177,6 +293,18 @@ class ListingBuilder:
             supplier_product_cents=req.supplier_product_cents,
             supplier_shipping_cents=req.supplier_shipping_cents,
             supplier_total_cents=req.supplier_total_cents,
+            supplier_options=supplier_options or None,
+            # Descriptive columns that already have readers but have always been
+            # NULL: description_generator._product_summary builds "Color:",
+            # "Style:" and "Size/Length:" lines from these, and
+            # payload_builder._build_attributes sends chain_style to Etsy as a
+            # filterable attribute (defaulting every listing to "Cable Chain").
+            # Without them the description LLM knows only pillar, material and a
+            # price, so any dimension it states is invented.
+            color=_fit(attributes.get("color"), 50),
+            style=_fit(attributes.get("style"), 50),
+            size_info=attributes.get("size_info"),  # Text column, no cap needed
+            chain_style=_fit(attributes.get("chain_style"), 50),
             is_featured=settings.feature_listing_default if settings else False,
         )
         self.session.add(product)
@@ -258,6 +386,69 @@ class ListingBuilder:
             display_order=section.display_order,
         )
 
+    def _load_supplier_capture(
+        self, req: ListingBuildRequest
+    ) -> Optional[SourcingAnalysis]:
+        """Find the SourcingAnalysis this build came from, if any.
+
+        Preferred route is the KeywordScore the user picked in the Sourcing tab,
+        which points straight at its analysis. Falls back to the most recent
+        analysis for the same supplier SKU, which covers a build started from the
+        Build tab without going through sourcing first.
+        """
+        if req.selected_keyword_score_id:
+            score = (
+                self.session.query(KeywordScore)
+                .filter_by(id=req.selected_keyword_score_id)
+                .first()
+            )
+            if score is not None:
+                analysis = (
+                    self.session.query(SourcingAnalysis)
+                    .filter_by(id=score.analysis_id)
+                    .first()
+                )
+                if analysis is not None:
+                    return analysis
+
+        if req.rexven_sku:
+            return (
+                self.session.query(SourcingAnalysis)
+                .filter_by(rexven_sku=req.rexven_sku)
+                .order_by(SourcingAnalysis.id.desc())
+                .first()
+            )
+        return None
+
+    def _log_preset_mismatch(
+        self,
+        preset: VariationPreset,
+        supplier_options: list,
+        sku: Optional[str],
+    ) -> None:
+        """Record variations the preset offers that the supplier doesn't stock.
+
+        Deliberately does not block or alter the matrix — the matrix is still
+        preset-driven. This accumulates the evidence needed to decide whether to
+        derive it from the supplier instead. Known live case: REX-922's preset
+        offers a Silver finish while the supplier lists Gold only, so that
+        listing carries a variation nobody can fulfil.
+        """
+        if not supplier_options:
+            return
+        problems = reconcile_preset(
+            supplier_options,
+            preset.finishes or [],
+            preset.lengths_inches or [],
+        )
+        for problem in problems:
+            _log.warning(
+                "supplier_preset_mismatch",
+                rexven_sku=sku,
+                preset=preset.name,
+                detail=problem,
+            )
+
     def _resolve_rexven(self, req: ListingBuildRequest) -> dict:
         """Return dict with keys: image_path, image_url, cost_cents, title_tr."""
         if not req.rexven_url:
@@ -303,9 +494,17 @@ class ListingBuilder:
 # ── Background content pipeline ───────────────────────────────────────────────
 
 
+# Ceiling on a client-supplied deep-dive wait. A batch of 6 keywords at roughly
+# 8 minutes a dive is about 48 minutes; past an hour the run has gone wrong and
+# building on existing grounding beats waiting longer.
+_DEEPDIVE_WAIT_CAP_S = 3600
+_DEEPDIVE_WAIT_DEFAULT_S = 600
+
+
 async def run_listing_content_pipeline(
     product_sku: str,
     wait_for_deepdive: bool = False,
+    deepdive_wait_s: Optional[int] = None,
 ) -> None:
     """
     Background task: runs the existing content orchestrator, wraps each
@@ -344,7 +543,12 @@ async def run_listing_content_pipeline(
 
         if wait_for_deepdive and product.selected_keyword_score_id:
             await _await_deepdive_grounding(
-                session, product.selected_keyword_score_id
+                session,
+                product.selected_keyword_score_id,
+                timeout_s=min(
+                    deepdive_wait_s or _DEEPDIVE_WAIT_DEFAULT_S,
+                    _DEEPDIVE_WAIT_CAP_S,
+                ),
             )
 
         orchestrator = _build_orchestrator(session)
@@ -433,7 +637,7 @@ async def run_listing_content_pipeline(
 async def _await_deepdive_grounding(
     session: Session,
     keyword_score_id: int,
-    timeout_s: int = 600,
+    timeout_s: int = _DEEPDIVE_WAIT_DEFAULT_S,
     poll_interval_s: int = 15,
 ) -> None:
     """Wait (bounded) for the extension's Phase-2 deep-dive to refresh
@@ -443,6 +647,10 @@ async def _await_deepdive_grounding(
     endpoint refreshes ``KeywordResearch.last_analyzed_at``. We poll for a
     refresh that happened after this wait started; on timeout we proceed with
     whatever grounding already exists — never blocks the build indefinitely.
+
+    ``timeout_s`` is sized by the caller from the build's position in the
+    extension's serial deep-dive queue, since a later keyword's dive has not
+    started yet when its build begins waiting.
     """
     import asyncio
     from datetime import datetime, timedelta

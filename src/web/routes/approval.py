@@ -1,7 +1,7 @@
 """
 Phase 7 Routes — Human Approval UI
 
-GET  /approval                         — Step 7.1: approval queue
+GET  /approval                         — Step 7.1: approval queue (?skus= scopes it to one build batch)
 GET  /approval/{sku}                   — Step 7.2: variant comparison & approval
 POST /approval/{sku}/approve           — approve selected variant
 POST /approval/{sku}/draft             — save as draft (no-op redirect)
@@ -9,6 +9,7 @@ POST /approval/{sku}/reject            — reject all & clear for regeneration
 POST /approval/{sku}/hybrid            — save hybrid variant and approve
 PATCH /approval/{sku}/variant/{vid}    — inline auto-save (JSON)
 POST  /approval/{sku}/validate-field   — validate a single field (JSON)
+POST  /approval/{sku}/variant/{vid}/regenerate — redo ONE field of ONE variant (JSON)
 """
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from src.db.dependencies import get_session
 from src.db.models import Product, ProductImage, ProductStatus
 from src.modules.approval.service import (
     COPY_PASTE_FIELDS,
+    QUEUE_STATUS_FILTERS,
     approve_hybrid_variant,
     approve_variant,
     get_approval_queue,
@@ -41,6 +43,11 @@ from src.modules.approval.service import (
     toggle_copy_progress,
     update_variant_field,
     validate_field,
+)
+from src.modules.content.regenerate import (
+    REGENERABLE_FIELDS,
+    RegenerationError,
+    regenerate_variant_field,
 )
 from src.modules.etsy.payload_builder import EtsyListingPayloadBuilder
 
@@ -69,6 +76,14 @@ STATUS_BADGE_CLASS: dict[str, str] = {
     ProductStatus.FAILED.value:             "danger",
 }
 
+# (value, label) for the queue's filter tabs — ordered as they render.
+QUEUE_STATUS_TABS: tuple[tuple[str, str], ...] = (
+    ("pending",   "Pending"),
+    ("approved",  "Approved"),
+    ("published", "Published"),
+    ("all",       "All"),
+)
+
 CTR_BADGE: dict[str, str] = {
     "high":    "success",
     "medium":  "warning",
@@ -92,9 +107,24 @@ def _tmpl(name: str, request: Request, context: dict, **kwargs) -> HTMLResponse:
 async def approval_queue(
     request: Request,
     sort: str = "newest",
+    status: str = "",
+    skus: str = "",
     session: Session = Depends(get_session),
 ):
-    products = get_approval_queue(session, sort=sort)
+    # skus= scopes the queue to one build batch (the Chrome extension's hand-off
+    # link). A batch is routinely a mix of awaiting-approval and already-approved
+    # rows, so it defaults to "all" — the usual "pending" default would hide half
+    # of what the user just built.
+    sku_filter = [s.strip() for s in skus.split(",") if s.strip()]
+
+    if not status:
+        status = "all" if sku_filter else "pending"
+    if status not in QUEUE_STATUS_FILTERS:
+        status = "pending"
+
+    products = get_approval_queue(
+        session, sort=sort, status_filter=status, skus=sku_filter
+    )
 
     queue_items = []
     for p in products:
@@ -111,8 +141,14 @@ async def approval_queue(
         {
             "queue_items": queue_items,
             "sort": sort,
+            "status_filter": status,
+            "sku_filter": sku_filter,
+            "skus_param": ",".join(sku_filter),
+            "status_tabs": QUEUE_STATUS_TABS,
             "total": len(queue_items),
             "min_images": MIN_IMAGES_PER_LISTING,
+            "status_labels": STATUS_LABELS,
+            "status_badge_class": STATUS_BADGE_CLASS,
         },
     )
 
@@ -178,37 +214,6 @@ async def approval_detail(
             "low_images": len(images) < MIN_IMAGES_PER_LISTING,
         },
     )
-
-
-# ── Variants as JSON (Chrome extension inline approval) ──────────────────────
-
-@router.get("/{sku}/variants")
-async def approval_variants_json(
-    sku: str,
-    session: Session = Depends(get_session),
-):
-    """JSON mirror of the approval detail page, consumed by the Chrome
-    extension's inline approval step so the user can approve without leaving
-    the side panel."""
-    product = session.query(Product).filter_by(sku=sku).first()
-    if product is None:
-        return JSONResponse({"error": "not found"}, status_code=404)
-
-    variants = product.generated_variants or []
-    image_count = (
-        session.query(ProductImage).filter_by(product_id=product.id).count()
-    )
-    return JSONResponse({
-        "sku": sku,
-        "status": product.status,
-        "status_label": STATUS_LABELS.get(product.status, product.status),
-        "target_keyword": product.target_keyword,
-        "selected_id": product.selected_variant_id
-        or (variants[0]["id"] if variants else None),
-        "image_count": image_count,
-        "min_images": MIN_IMAGES_PER_LISTING,
-        "variants": variants,
-    })
 
 
 # ── Bulk image download (ZIP) ─────────────────────────────────────────────────
@@ -297,11 +302,12 @@ async def approve_selected(
     except Exception:
         overrides = []
 
-    ok = approve_variant(session, product, variant_id, overrides=overrides)
-    if not ok:
-        return RedirectResponse(url=f"/approval/{sku}", status_code=303)
+    approve_variant(session, product, variant_id, overrides=overrides)
 
-    return RedirectResponse(url=f"/products/{sku}", status_code=303)
+    # Stay on the variants page — the other variants remain useful (and
+    # publishable) after one is approved, so approving must not navigate away
+    # from them. The page renders for any status.
+    return RedirectResponse(url=f"/approval/{sku}", status_code=303)
 
 
 # ── Publish selected variants as separate listings ────────────────────────────
@@ -489,7 +495,7 @@ async def approve_hybrid(
     approve_hybrid_variant(
         session, product, title, tags, description, source_angles, overrides=overrides
     )
-    return RedirectResponse(url=f"/products/{sku}", status_code=303)
+    return RedirectResponse(url=f"/approval/{sku}", status_code=303)
 
 
 # ── Inline auto-save (JSON PATCH) ─────────────────────────────────────────────
@@ -512,7 +518,10 @@ async def autosave_variant_field(
     if not field or value is None:
         return JSONResponse({"error": "field and value required"}, status_code=422)
 
-    ok, violations = validate_field(field, value)
+    # Tag rules compare against the paired title (wasted slots, material
+    # coherence), so hand the stored title through.
+    variant = get_variant_by_id(product, variant_id) or {}
+    ok, violations = validate_field(field, value, paired_title=variant.get("title", ""))
 
     updated = update_variant_field(session, product, variant_id, field, value)
     if not updated:
@@ -521,16 +530,89 @@ async def autosave_variant_field(
     return JSONResponse({"saved": True, "valid": ok, "violations": violations})
 
 
+# ── Per-field regeneration (JSON POST) ────────────────────────────────────────
+
+@router.post("/{sku}/variant/{variant_id}/regenerate")
+async def regenerate_variant_field_endpoint(
+    sku: str,
+    variant_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Redo ONE field of ONE variant. Costs a single LLM call; no re-scrape.
+
+    Runs inline rather than as a background task: one field is one call, so the
+    caller can hold a spinner instead of polling a progress page.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    body = await request.json()
+    field = body.get("field", "")
+    if field not in REGENERABLE_FIELDS:
+        return JSONResponse(
+            {"error": f"field must be one of {sorted(REGENERABLE_FIELDS)}"},
+            status_code=422,
+        )
+
+    variant = get_variant_by_id(product, variant_id)
+    if variant is None:
+        return JSONResponse({"error": "variant not found"}, status_code=404)
+
+    # Built here rather than at import time — it opens an LLM client.
+    from src.web.routes.content import _build_orchestrator
+
+    try:
+        result = await regenerate_variant_field(
+            product, variant, field, _build_orchestrator(session), session=session
+        )
+    except RegenerationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:  # noqa: BLE001 — surface the reason to the UI
+        _log.exception("variant_regen_failed", sku=sku, variant=variant_id, field=field)
+        return JSONResponse({"error": f"Regeneration failed: {exc}"}, status_code=500)
+
+    # Persist field by field so a regen never clobbers an unsaved inline edit to
+    # a field it did not touch.
+    for name, value in result["updates"].items():
+        update_variant_field(session, product, variant_id, name, value)
+
+    updated = result["updates"]
+    ok, violations = validate_field(
+        field,
+        updated.get(field),
+        paired_title=updated.get("title", variant.get("title", "")),
+    )
+    return JSONResponse({
+        "regenerated": True,
+        "field": field,
+        "updates": updated,
+        "notes": result["notes"],
+        "valid": ok,
+        "violations": violations,
+    })
+
+
 # ── Real-time field validation (JSON POST) ────────────────────────────────────
 
 @router.post("/{sku}/validate-field")
 async def validate_field_endpoint(
     sku: str,
     request: Request,
+    session: Session = Depends(get_session),
 ):
     body = await request.json()
     field = body.get("field", "")
     value = body.get("value", "")
 
-    ok, violations = validate_field(field, value)
+    # The caller may send the in-progress title alongside (hybrid editor); fall
+    # back to the stored variant's title so tag rules stay title-aware.
+    paired_title = body.get("paired_title", "")
+    if not paired_title and (variant_id := body.get("variant_id", "")):
+        product = session.query(Product).filter_by(sku=sku).first()
+        if product is not None:
+            paired_title = (get_variant_by_id(product, variant_id) or {}).get("title", "")
+
+    ok, violations = validate_field(field, value, paired_title=paired_title)
     return JSONResponse({"valid": ok, "violations": violations})

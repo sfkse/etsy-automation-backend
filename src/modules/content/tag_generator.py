@@ -7,15 +7,20 @@ variant's title for internal consistency.
 Volume-aware strategy:
   Each angle uses a different bucket ratio (mainstream / medium / niche) so
   that the 3 variants draw from different parts of the search volume spectrum.
-  When EHunt volume data is absent, falls back to the classic 8-niche/3-medium/2-big rule.
+  When EHunt volume data is absent, falls back to the classic 9-niche/3-medium/1-big rule.
+
+Mechanical defects (casing, tags duplicating the title) are auto-corrected by
+``normalize_tags`` before validation; judgment calls (broad-tag overage, too few
+long-tail tags) stay as violations for the approval screen.
 """
 from __future__ import annotations
 
 import structlog
 
+from src.config.business_rules import TAG_COUNT
 from src.config.prompts import TAG_DYNAMIC_TEMPLATE, TAG_STATIC_PREFIX
 from src.db.models import Product
-from src.domain.validators import validate_tags
+from src.domain.validators import normalize_tags, validate_tags
 from src.modules.llm.angles import VariantAngle
 from src.modules.research.context_builder import ResearchContextBuilder
 from src.modules.content.keyword_pool import KeywordPoolManager
@@ -23,7 +28,10 @@ from src.utils.llm_client import LLMClient
 
 _log = structlog.get_logger(__name__)
 
-_FALLBACK_DISTRIBUTION = "Use the classic distribution: 8 niche (<10M), 3 medium (10-50M), 2 big (>50M)."
+_FALLBACK_DISTRIBUTION = (
+    "Use the classic distribution: 9 niche (<10M), 3 medium (10-50M), 1 big (>50M). "
+    "Never exceed 2 big tags — they inflate ad spend without a matching lift."
+)
 
 
 def _fmt_vol(v: int | None) -> str:
@@ -81,6 +89,9 @@ class TagGenerator:
 
         research_ctx = self.research.build_for_product(product)
         volume_buckets = self._extract_volume_buckets(research_ctx)
+        research_tags = [
+            t for t, _ in (research_ctx.top_tags[:30] if research_ctx.has_data else [])
+        ]
 
         if volume_buckets:
             target = angle.tag_distribution
@@ -93,7 +104,6 @@ class TagGenerator:
                 "Each candidate below is labelled with its bucket — pick from the right bucket."
             )
         else:
-            research_tags = [t for t, _ in (research_ctx.top_tags[:30] if research_ctx.has_data else [])]
             angle_candidates_raw = _merge_unique(research_tags, pool_candidates, max_items=60)
             # Format as simple strings for the prompt
             angle_candidates = [{"tag": t, "volume": None, "bucket": "pool"} for t in angle_candidates_raw]
@@ -112,12 +122,17 @@ class TagGenerator:
         response = await self.llm.complete(
             prompt=prompt, cached_prefix=TAG_STATIC_PREFIX, max_tokens=400
         )
-        tags = self._parse_tags(response)
+        tags = self._normalize_and_backfill(
+            self._parse_tags(response), paired_title, angle, pool_candidates,
+            research_tags=research_tags,
+        )
 
         is_valid, violations = validate_tags(tags, paired_title)
         if not is_valid:
             _log.warning("tags_invalid", angle=angle.label, violations=violations)
-            tags = await self._retry_generate(product, angle, paired_title, violations)
+            tags = await self._retry_generate(
+                product, angle, paired_title, violations, research_tags=research_tags
+            )
 
         # Log research-derivation ratio for monitoring
         if research_ctx.has_data:
@@ -132,6 +147,79 @@ class TagGenerator:
             )
 
         return tags
+
+    def _normalize_and_backfill(
+        self,
+        tags: list[str],
+        paired_title: str,
+        angle: VariantAngle,
+        pool_candidates: list[str],
+        research_tags: list[str] | None = None,
+    ) -> list[str]:
+        """Auto-correct casing / title-duplicate tags, then refill the freed slots
+        so the count never drops below ``TAG_COUNT``.
+
+        Etsy gives every listing 13 tag slots and the guide treats all 13 as
+        mandatory, so shipping fewer is strictly worse than shipping a redundant
+        one. Replacements are tried in order — pillar pool, then research tags,
+        then universal staples — and if every source is exhausted the dropped
+        tags go back in. ``validate_tags`` still reports the wasted slot, so a
+        human sees it; the listing just never goes out under-filled.
+        """
+        original_count = len(tags)
+        cleaned, notes = normalize_tags(tags, paired_title)
+        if notes:
+            _log.info("tags_normalized", angle=angle.label, fixes=notes)
+        if len(cleaned) >= TAG_COUNT:
+            return cleaned[:TAG_COUNT]
+
+        dropped_count = original_count - len(cleaned)
+        taken = {t.lower() for t in cleaned}
+
+        def _take_from(source: list[str], allow_title_dupes: bool = False) -> int:
+            added = 0
+            for candidate in source:
+                if len(cleaned) >= TAG_COUNT:
+                    break
+                # Passing no title skips the wasted-slot drop, which is what the
+                # last-resort restore needs.
+                normalized, _ = normalize_tags(
+                    [candidate], "" if allow_title_dupes else paired_title
+                )
+                if not normalized or normalized[0].lower() in taken:
+                    continue
+                cleaned.append(normalized[0])
+                taken.add(normalized[0].lower())
+                added += 1
+            return added
+
+        from_pool = _take_from(pool_candidates)
+        from_research = _take_from(research_tags or [])
+        from_universal = _take_from(self.pool.get_universal_keywords())
+
+        # Last resort: put back what we dropped rather than ship an empty slot.
+        restored = _take_from(tags, allow_title_dupes=True)
+
+        _log.info(
+            "tags_backfilled",
+            angle=angle.label,
+            dropped=dropped_count,
+            from_pool=from_pool,
+            from_research=from_research,
+            from_universal=from_universal,
+            restored=restored,
+            final=len(cleaned),
+        )
+        if len(cleaned) < TAG_COUNT:
+            _log.warning(
+                "tags_still_short",
+                angle=angle.label,
+                count=len(cleaned),
+                expected=TAG_COUNT,
+                hint="keyword_pool has no rows for this carrier_pillar",
+            )
+
+        return cleaned[:TAG_COUNT]
 
     def _extract_volume_buckets(self, ctx) -> dict:
         """Pull volume_stratified_tags from research_ctx, or {} if not present."""
@@ -217,6 +305,7 @@ class TagGenerator:
         angle: VariantAngle,
         paired_title: str,
         violations: list[str],
+        research_tags: list[str] | None = None,
     ) -> list[str]:
         """Retry with a tighter prompt that lists the specific violations."""
         pool_candidates = self.pool.get_candidates(
@@ -239,7 +328,10 @@ class TagGenerator:
         response = await self.llm.complete(
             prompt=retry_prompt, cached_prefix=TAG_STATIC_PREFIX, max_tokens=400
         )
-        tags = self._parse_tags(response)
+        tags = self._normalize_and_backfill(
+            self._parse_tags(response), paired_title, angle, pool_candidates,
+            research_tags=research_tags,
+        )
         is_valid, remaining = validate_tags(tags, paired_title)
         if not is_valid:
             _log.error("tag_retry_also_failed", angle=angle.label, violations=remaining)

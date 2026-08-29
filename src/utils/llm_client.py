@@ -32,7 +32,6 @@ class LLMClient:
         max_tokens: int = _MAX_TOKENS,
         model: str | None = None,
         cached_prefix: str | None = None,
-        temperature: float = 1.0,
     ) -> str:
         """Send a completion request, optionally with a cached prefix.
 
@@ -69,13 +68,14 @@ class LLMClient:
         else:
             messages = [{"role": "user", "content": prompt}]
 
-        # NOTE: temperature is accepted by claude-sonnet-4-5 / claude-haiku-4-5.
-        # If LLM_MODEL_CREATIVE/STRUCTURED is ever bumped to a 4.7+/5 model,
-        # sampling params are rejected (400) and this must be dropped.
+        # NOTE: no sampling params. The anthropic SDK removed temperature/top_p
+        # from messages.create() in 1.0 — passing them is a TypeError, not a 400.
+        # Every caller here used the default of 1.0, which is also the API's
+        # default, so omitting it leaves request behaviour unchanged. This form
+        # works on both 0.x and 1.x SDKs.
         message = await self._client.messages.create(
             model=used_model,
             max_tokens=max_tokens,
-            temperature=temperature,
             messages=messages,
         )
         usage = message.usage

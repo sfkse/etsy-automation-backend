@@ -148,6 +148,11 @@ class Product(Base):
     selected_keyword_score_id = Column(
         Integer, nullable=True
     )  # Phase 4 sourcing: KeywordScore chosen to ground content generation
+    supplier_options = Column(
+        JSONB, nullable=True
+    )  # What the supplier actually stocks, as captured. The variation matrix is
+    # still built from a VariationPreset; this is recorded so the two can be
+    # compared (see reconcile_preset) and, later, so the matrix can be derived.
 
     images = relationship("ProductImage", back_populates="product")
     stats = relationship("ProductStats", back_populates="product")
@@ -283,12 +288,32 @@ class ShopClassification(str, Enum):
 
 
 class CompetitorListing(Base):
-    """One row per Etsy listing scraped via the Chrome extension."""
+    """One row per (Etsy listing, keyword it was scraped for).
+
+    NOT one row per listing. `listing_id` was unique until the composite key
+    below replaced it, which meant the table could not represent a listing
+    ranking for two keywords: the first keyword to ingest a listing claimed it
+    permanently, and every later keyword returning that same listing lost it at
+    ingest. Overlapping keywords therefore cannibalized each other's competitor
+    sets — a niche keyword whose Etsy results resemble an already-scraped
+    generic one retained almost nothing, fell under OpportunityScorer's 5-row
+    floor, and was silently dropped as `scorer_skip_insufficient_data`.
+
+    One row per listing-per-keyword duplicates the listing-level columns across
+    rows. Two consequences to preserve when touching this table:
+      - Phase 2 detail merges must fan out to every row for a listing_id
+        (`ingest_phase2`, research's merge), not just `.first()`.
+      - CLIP embedding is per-image, so `_embed_analysis_listings` embeds once
+        per listing_id and copies the vector to its sibling rows.
+    """
 
     __tablename__ = "competitor_listings"
+    __table_args__ = (
+        UniqueConstraint("listing_id", "keyword_searched", name="uq_listing_keyword"),
+    )
 
     id = Column(Integer, primary_key=True)
-    listing_id = Column(String(20), unique=True, nullable=False, index=True)
+    listing_id = Column(String(20), nullable=False, index=True)
     url = Column(String(500))
     keyword_searched = Column(String(100), index=True)
     rank_in_search = Column(Integer)
@@ -441,8 +466,31 @@ class SourcingAnalysis(Base):
     rexven_cost_usd_cents = Column(Integer, nullable=True)
     rexven_premium_cost_usd_cents = Column(Integer, nullable=True)
     rexven_category = Column(String(50), nullable=True)
+    # The "satışa uygun" badge means "open for sale IN TÜRKİYE" — a domestic-market
+    # flag with no bearing on the US market we sell to. Retained so the column
+    # doesn't need dropping, but nothing writes it and nothing should read it.
     rexven_has_satisa_uygun_badge = Column(Boolean, default=False)
     rexven_has_yeni_badge = Column(Boolean, default=False)
+
+    # Shipping is 33-53% of landed cost. Without it the opportunity scorer's
+    # price_alignment sub-score targeted product-cost x 4 while the listing was
+    # priced off landed-cost x 4.
+    rexven_shipping_cents = Column(Integer, nullable=True)
+
+    # Supplier option domains, normalized from the captured API payload or the
+    # DOM fallback. Shape: [{"name": "Renk", "selected": "Gold",
+    # "values": ["Gold", "Silver"] | None, "key": "color" | None}].
+    # `values: null` means "domain unknown", NOT "single value" — see
+    # rexven_normalizer for why that distinction matters.
+    rexven_options = Column(JSONB, nullable=True)
+
+    # Parsed Turkish spec block, English-keyed. Unmapped labels are kept under
+    # "extra" rather than dropped, because option sets differ per product family.
+    rexven_attributes = Column(JSONB, nullable=True)
+
+    # Verbatim capture, kept so a later mapping pass can re-normalize without
+    # re-scraping the page.
+    rexven_raw_payload = Column(JSONB, nullable=True)
 
     # Analysis state
     status = Column(String(30), default=SourcingStatus.PENDING.value)
@@ -450,6 +498,13 @@ class SourcingAnalysis(Base):
     layer_b_completed = Column(Boolean, default=False)
     layer_c_completed = Column(Boolean, default=False)
     error_message = Column(Text, nullable=True)
+
+    # Layer A candidates that Layer B could not score, with the reason. Written
+    # by OpportunityScorer.score_analysis. Previously these were dropped with
+    # only a log line, so a keyword starved of competitor data was
+    # indistinguishable from one the vision model never proposed. Shape:
+    # [{"keyword", "tier", "reason", "listings_found", "listings_required"}].
+    unscored_candidates = Column(JSONB, nullable=True)
 
     # Cost tracking
     vision_tokens_used = Column(Integer, default=0)

@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
             _seed_shop_defaults(_seed_session)
     except Exception as _seed_exc:  # pragma: no cover — startup best-effort
         import structlog
+
         structlog.get_logger(__name__).warning(
             "shop_defaults_seed_skipped", error=str(_seed_exc)
         )
@@ -103,3 +104,9 @@ app.include_router(settings_routes.router)
 @app.get("/")
 async def root():
     return RedirectResponse(url="/products", status_code=302)
+
+
+@app.get("/health")
+async def health():
+    """Cheap 200 for the docker-compose healthcheck ("/" returns a 302)."""
+    return {"status": "ok"}

@@ -11,8 +11,8 @@
     </div>
     <h2 class="mb-0 d-flex align-items-center gap-2">
       <code>{{ product.sku }}</code>
-      <span class="badge bg-{{ status_badge_class.get(product.status, 'secondary') }} fs-6 fw-normal">
-        {{ status_labels.get(product.status, product.status) }}
+      <span class="badge bg-{{ status_badge_class.get(product.status|lower, 'secondary') }} fs-6 fw-normal">
+        {{ status_labels.get(product.status|lower, product.status) }}
       </span>
     </h2>
     <p class="text-muted mb-0">{{ product.carrier_pillar | replace('_', ' ') | title }}
@@ -24,7 +24,7 @@
   <!-- ── Status-dependent action area ──────────────────────────────── -->
   <div class="d-flex flex-column align-items-end gap-2">
 
-    {% if product.status == 'manual_input' %}
+    {% if product.status|lower == 'manual_input' %}
     <form method="post" action="/products/{{ product.sku }}/process" class="d-flex align-items-center gap-2">
       <div class="input-group" style="width:auto;">
         <label class="input-group-text" for="workflow">Workflow</label>
@@ -46,12 +46,12 @@
       </button>
     </form>
 
-    {% elif product.status in ('image_processing', 'content_generating') %}
+    {% elif product.status|lower in ('image_processing', 'content_generating') %}
     <a href="/products/{{ product.sku }}/progress" class="btn btn-info text-white">
       ⏳ View Progress
     </a>
 
-    {% elif product.status == 'awaiting_approval' %}
+    {% elif product.status|lower == 'awaiting_approval' %}
     {% if not product.generated_variants %}
     <form method="post" action="/products/{{ product.sku }}/generate-content">
       <button type="submit" class="btn btn-primary px-4">
@@ -64,7 +64,17 @@
     </a>
     {% endif %}
 
-    {% elif product.status == 'published' %}
+    {% elif product.status|lower == 'approved' %}
+    <a href="/approval/{{ product.sku }}" class="btn btn-primary">
+      ↩ View variants
+    </a>
+    {% if product.published_variant_ids %}
+    <a href="/approval/{{ product.sku }}/copy-paste-helper" class="btn btn-success">
+      📋 Copy-Paste Helper ({{ product.published_variant_ids | join(' ') }})
+    </a>
+    {% endif %}
+
+    {% elif product.status|lower == 'published' %}
     {% if product.published_variant_ids %}
     <a href="/approval/{{ product.sku }}/copy-paste-helper" class="btn btn-success">
       📋 Copy-Paste Helper ({{ product.published_variant_ids | join(' ') }})
@@ -79,7 +89,7 @@
     </a>
     {% endif %}
 
-    {% elif product.status == 'failed' %}
+    {% elif product.status|lower == 'failed' %}
     <form method="post" action="/products/{{ product.sku }}/process" class="d-flex align-items-center gap-2">
       <div class="input-group" style="width:auto;">
         <label class="input-group-text" for="workflow_retry">Workflow</label>
@@ -106,7 +116,7 @@
   <!-- ── Left: product fields ─────────────────────────────────────── -->
   <div class="col-lg-7">
 
-    {% set editable = product.status in ('approved', 'published') %}
+    {% set editable = product.status|lower in ('approved', 'published') %}
 
     <div class="card border-0 shadow-sm mb-4">
       <div class="card-header fw-semibold bg-white border-bottom">Product Details</div>
@@ -221,7 +231,7 @@
       </div>
     </div>
 
-    {% if product.status in ('awaiting_approval', 'approved', 'published') and product.generated_variants %}
+    {% if product.status|lower in ('awaiting_approval', 'approved', 'published') and product.generated_variants %}
     <div class="card border-0 shadow-sm mb-4">
       <div class="card-header fw-semibold bg-white border-bottom">Generated Variants</div>
       <div class="card-body">
@@ -367,7 +377,7 @@
           {% endif %}
         </dl>
       </div>
-      {% if product.status == 'manual_input' %}
+      {% if product.status|lower == 'manual_input' %}
       <div class="card-footer bg-white border-top">
         <a href="/products/{{ product.sku }}/comparison" class="btn btn-outline-secondary btn-sm w-100">
           View Comparison

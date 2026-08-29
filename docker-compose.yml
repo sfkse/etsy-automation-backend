@@ -1,3 +1,9 @@
+# Pinned so the project name doesn't change with the directory you run from.
+# The existing etsy_taki_pg container and its etsy_etsy_taki_pgdata volume were
+# created under this name from the repo root; without it, running from backend/
+# derives "backend" and collides instead of reusing them.
+name: etsy
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,5 +23,44 @@ services:
       timeout: 3s
       retries: 10
 
+  api:
+    build: .
+    container_name: etsy_taki_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Overrides the localhost URL in .env — .env stays host-usable so alembic
+      # and pytest still work outside Docker.
+      DATABASE_URL: postgresql+psycopg://etsy:etsy_local_dev@postgres:5432/etsy_taki
+      # Windows only: uncomment if the repo lives on C:\ rather than inside the
+      # WSL2 filesystem. inotify events don't cross the Windows→WSL2 boundary,
+      # so --reload silently never fires — no error, edits just don't apply.
+      # Costs some idle CPU; putting the repo under \\wsl$\ is the better fix.
+      # WATCHFILES_FORCE_POLLING: "true"
+    ports:
+      # Fixed at 8000: the Chrome extension and ETSY_REDIRECT_URI hardcode it.
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+      - ./data:/app/data          # bind mount — preserves data/etsy_encryption.key
+      - hf_cache:/root/.cache/huggingface
+      - u2net_cache:/root/.u2net
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir src"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
 volumes:
   etsy_taki_pgdata:
+  hf_cache:
+  u2net_cache:

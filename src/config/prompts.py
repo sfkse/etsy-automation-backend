@@ -147,7 +147,13 @@ STRICT RULES (must never be violated):
 3. No duplicate tags (case-insensitive).
 4. Do NOT use the phrase "Mother's Day Gift" — use "gifts for mom" instead.
 5. Do NOT repeat phrases already prominent in the paired title (those slots are wasted).
-6. Tags should be multi-word phrases when possible (2-4 words) — single generic words rank poorly."""
+6. Tags should be multi-word phrases when possible (2-4 words) — single generic words rank poorly.
+7. At most 2 broad tags. Broad = gift occasions ("gifts for mom", "birthday gift",
+   "christmas gift", "bridesmaid gift") and bare qualifiers ("gold", "dainty",
+   "personalized", "sterling silver"). At least 8 tags must be long-tail niche phrases.
+8. Capitalize the first letter of every word ("Cross Necklace", not "cross necklace").
+9. Keep the material story consistent with the paired title — do not tag gold plating
+   on a sterling silver listing, or vice versa."""
 
 
 TAG_DYNAMIC_TEMPLATE = """\
