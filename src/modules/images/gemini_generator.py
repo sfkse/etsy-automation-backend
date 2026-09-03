@@ -43,6 +43,14 @@ class GeminiImageGenerator(AbstractImageGenerator):
             ],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],
+                # Etsy listing photos are square. Without this the model follows
+                # the reference photo's aspect ratio, and the non-square result
+                # had to be letterboxed onto a white canvas downstream — white
+                # bars down both sides of every slot. Asking for 1:1 here means
+                # the model composes for a square instead of us cropping one out
+                # of a portrait frame and losing the top and bottom of the shot.
+                # Defaults to "1:1" on the request; overridable per call.
+                image_config=types.ImageConfig(aspect_ratio=request.aspect_ratio),
             ),
         )
 

@@ -22,6 +22,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    networks:
+      - etsy_network
 
   api:
     build: .
@@ -59,8 +61,13 @@ services:
       timeout: 3s
       retries: 5
       start_period: 30s
-
+    networks:
+      - etsy_network
+      
 volumes:
   etsy_taki_pgdata:
   hf_cache:
   u2net_cache:
+networks:
+  etsy_network:
+    driver: bridge

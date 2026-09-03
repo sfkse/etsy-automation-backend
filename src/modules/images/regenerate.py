@@ -1,7 +1,7 @@
 """Per-slot image regeneration & multi-backend comparison.
 
-Supports the "6 AI photos, mix backends" workflow:
-  - regenerate a single slot (mannequin-1..3 / concept-1..3) with any backend,
+Supports the "7 AI photos, mix backends" workflow:
+  - regenerate a single slot (mannequin-1..4 / concept-1..3) with any backend,
     replacing that photo in place;
   - generate candidates for one slot across several backends for side-by-side
     comparison (candidates are NOT committed to the slot);
@@ -41,12 +41,12 @@ logger = get_logger(__name__)
 
 
 # ── Slot registry ────────────────────────────────────────────────────────────
-# Slot identity is palette-independent (a stable list of 6 slots); only the
+# Slot identity is palette-independent (a stable list of 7 slots); only the
 # prompt *text* varies with the chosen palette. Rank/cover mirror the jewelry_9
-# pipeline: mannequin-1..3 = rank 1..3 (mannequin-1 is the cover),
-# concept-1..3 = rank 4..6.
+# pipeline: mannequin-1..4 = rank 1..4 (mannequin-1 is the cover),
+# concept-1..3 = rank 5..7.
 SLOT_ORDER: list[str] = [
-    "mannequin-1", "mannequin-2", "mannequin-3",
+    "mannequin-1", "mannequin-2", "mannequin-3", "mannequin-4",
     "concept-1", "concept-2", "concept-3",
 ]
 
@@ -54,10 +54,11 @@ SLOT_ORDER: list[str] = [
 def build_slots(p: Palette) -> dict[str, tuple[str, int, bool]]:
     """slot -> (prompt, rank, is_cover) for the given palette."""
     slots: dict[str, tuple[str, int, bool]] = {}
-    for i, prompt in enumerate(build_mannequin_prompts(p), start=1):
+    mannequin_prompts = build_mannequin_prompts(p)
+    for i, prompt in enumerate(mannequin_prompts, start=1):
         slots[f"mannequin-{i}"] = (prompt, i, i == 1)
     for i, prompt in enumerate(build_concept_prompts(p), start=1):
-        slots[f"concept-{i}"] = (prompt, 3 + i, False)
+        slots[f"concept-{i}"] = (prompt, len(mannequin_prompts) + i, False)
     return slots
 
 
@@ -156,7 +157,7 @@ async def regenerate_slot(
         raise ValueError(f"Unknown slot {slot!r}. Valid: {SLOT_ORDER}")
 
     pal = resolve_palette(palette)
-    style_hint = build_style_hint(pal)
+    style_hint = build_style_hint(pal, still_life=slot.startswith("concept"))
     prompt, rank, is_cover = build_slots(pal)[slot]
     reference = _reference_image(product, session, settings)
     generator = ImageWorkflowFactory.get(workflow, settings)
@@ -221,7 +222,7 @@ async def generate_slot_candidates(
 
     workflows = workflows or ImageWorkflowFactory.available_workflows()
     pal = resolve_palette(palette)
-    style_hint = build_style_hint(pal)
+    style_hint = build_style_hint(pal, still_life=slot.startswith("concept"))
     prompt, _rank, is_cover = build_slots(pal)[slot]
     prompt = _effective_prompt(prompt, instructions)
     reference = _reference_image(product, session, settings)

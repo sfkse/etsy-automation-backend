@@ -250,15 +250,14 @@ Backend'de **`/products/new`** sayfasına git:
 
 Backend arka planda şunları yapar:
 1. **Stage 1**: AI image generation. `ShopSettings.image_workflow_mode` dispatch:
-   - **`"jewelry_9"` (yeni default)** — 3 mannequin + 3 concept + 3 chart, rank sıralı:
+   - **`"jewelry_9"` (yeni default)** — 4 mannequin + 3 concept + 3 chart, rank sıralı:
      ```
      Rank 1     — cover photo (best mannequin, auto-cropped)
-     Rank 2-3   — mannequin shots
-     Rank 4-6   — concept lifestyle shots
-     Rank 7     — size chart (deterministik Pillow overlay)
-     Rank 8     — birthstone chart (yalnızca stone_shape veya has_birthstone ise)
-     Rank 9     — care instructions chart
-     Rank 10    — opsiyonel gift-box shot
+     Rank 2-4   — mannequin shots (4 = zinciri parmak uçlarıyla kaldıran poz)
+     Rank 5-7   — concept lifestyle shots
+     Rank 8     — size chart (deterministik Pillow overlay)
+     Rank 9     — birthstone chart (yalnızca stone_shape veya has_birthstone ise)
+     Rank 10    — care instructions chart
      ```
    - **`"legacy"`** — eski 5-lifestyle akışı. Dönmek için: `/settings/operations` → `image_workflow_mode="legacy"`.
 2. **Stage 2 (paralel)**: 3 LLM variant üretir

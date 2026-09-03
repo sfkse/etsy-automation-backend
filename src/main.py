@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from urllib.parse import quote_plus
 from pathlib import Path
@@ -52,8 +53,29 @@ async def lifespan(app: FastAPI):
             "shop_defaults_seed_skipped", error=str(_seed_exc)
         )
 
+    # Load the rembg/u2net model at boot instead of inside the first listing
+    # build. In a thread and off the critical path: the first call downloads
+    # ~176MB, which is longer than the compose healthcheck's start_period, so
+    # blocking startup on it would just make the container come up unhealthy.
+    # Best-effort — on failure the pipeline loads the model lazily as before.
+    async def _warm_rembg() -> None:
+        import structlog
+
+        _log = structlog.get_logger(__name__)
+        try:
+            from src.modules.images.preprocessing import warm_up
+
+            await asyncio.to_thread(warm_up)
+            _log.info("rembg_warmup_complete")
+        except Exception as exc:
+            _log.warning("rembg_warmup_skipped", error=str(exc))
+
+    # Held in a local so the task isn't garbage-collected mid-flight.
+    _warmup_task = asyncio.create_task(_warm_rembg())
+
     yield
 
+    _warmup_task.cancel()
     scheduler.shutdown(wait=False)
 
 

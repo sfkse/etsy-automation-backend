@@ -71,7 +71,7 @@ async def test_jewelry_9_pipeline_persists_nine_ranked_images(tmp_path):
     settings.DEFAULT_IMAGE_WORKFLOW = "gemini"
 
     fake_set = JewelryImageSet(
-        mannequin_shots=[_ai_result() for _ in range(3)],
+        mannequin_shots=[_ai_result() for _ in range(4)],
         concept_shots=[_ai_result() for _ in range(3)],
         size_chart=_chart(str(tmp_path / "size.png"), "size"),
         birthstone_chart=_chart(str(tmp_path / "birthstone.png"), "birthstone"),
@@ -94,11 +94,11 @@ async def test_jewelry_9_pipeline_persists_nine_ranked_images(tmp_path):
         await run_image_pipeline(product=product, session=session, settings=settings)
 
     ranks = [row.rank for row in added_rows]
-    assert ranks == [1, 2, 3, 4, 5, 6, 7, 8, 9], f"unexpected ranks: {ranks}"
+    assert ranks == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], f"unexpected ranks: {ranks}"
 
     workflow_sources = [row.workflow_source for row in added_rows]
-    assert workflow_sources[:6] == ["gemini"] * 6
-    assert workflow_sources[6:] == ["chart:size", "chart:birthstone", "chart:care"]
+    assert workflow_sources[:7] == ["gemini"] * 7
+    assert workflow_sources[7:] == ["chart:size", "chart:birthstone", "chart:care"]
 
     assert added_rows[0].is_selected is True
     assert all(row.is_selected is False for row in added_rows[1:])

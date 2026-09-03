@@ -23,6 +23,9 @@ check is slow and every one after that is not.
 
 ### On Windows
 
+Setting up from scratch — WSL 2, Docker Desktop, and the failures worth knowing
+about in advance — is covered step by step in [WINDOWS_SETUP.md](WINDOWS_SETUP.md).
+
 Works, but rebuild rather than copying an image across machines — `docker
 compose up --build` pulls the right architecture.
 

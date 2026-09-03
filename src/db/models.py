@@ -661,7 +661,7 @@ class ShopSettings(Base):
     # Default shipping profile (referenced by Etsy payload builder)
     default_shipping_profile_id = Column(String(50), nullable=True)
 
-    # Image workflow mode: "jewelry_9" (3 mannequin + 3 concept + 3 chart) or "legacy" (5 lifestyle)
+    # Image workflow mode: "jewelry_9" (4 mannequin + 3 concept + 3 chart) or "legacy" (5 lifestyle)
     image_workflow_mode = Column(String(20), default="jewelry_9")
 
     # Default colour palette applied to generated photos (see jewelry_set.PALETTES).
