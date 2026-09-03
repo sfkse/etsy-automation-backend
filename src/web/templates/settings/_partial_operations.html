@@ -4,7 +4,7 @@
     <label class="form-label small text-muted">Image workflow mode</label>
     <select name="image_workflow_mode" class="form-select">
       {% set mode = op.image_workflow_mode or 'jewelry_9' %}
-      <option value="jewelry_9" {% if mode == 'jewelry_9' %}selected{% endif %}>jewelry_9 (3 mannequin + 3 concept + 3 chart)</option>
+      <option value="jewelry_9" {% if mode == 'jewelry_9' %}selected{% endif %}>jewelry_9 (4 mannequin + 3 concept + 3 chart)</option>
       <option value="legacy" {% if mode == 'legacy' %}selected{% endif %}>legacy (5 lifestyle)</option>
     </select>
   </div>

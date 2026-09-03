@@ -72,19 +72,26 @@ def _seo_filename(sku: str, index: int, product: Product) -> str:
 
 
 def _resize_to_target(img: Image.Image) -> Image.Image:
-    """Scale image up/down to fill TARGET_SIZE (2000×2000), preserving aspect.
+    """Scale and centre-crop the image to completely fill TARGET_SIZE (2000×2000).
 
-    Uses ``ImageOps.contain`` which *upscales* as well as downscales (unlike
-    ``Image.thumbnail`` which only shrinks) — so the native 1024×1024 model
-    output fills the full 2000×2000 frame instead of floating in white padding.
-    Any non-square output is letterboxed onto a white canvas.
+    ``ImageOps.fit`` scales the shorter side up to cover the square and trims the
+    overflow, so every saved photo spans its whole frame. The previous
+    ``ImageOps.contain`` version preserved the entire composition but padded a
+    non-square model output onto a white canvas — white bars down both sides of
+    every slot except the cover, which ``auto_crop_cover_photo`` re-cropped
+    afterwards and which was therefore the only photo that looked right.
+
+    Generators now request square output (see ``GeminiImageGenerator``), so this
+    is the fallback for anything that still comes back off-ratio rather than the
+    usual path — a square input passes through as a plain upscale, uncropped.
     """
-    img = img.convert("RGBA")
-    canvas = Image.new("RGBA", TARGET_SIZE, (255, 255, 255, 255))
-    img = ImageOps.contain(img, TARGET_SIZE, Image.LANCZOS)
-    offset = ((TARGET_SIZE[0] - img.width) // 2, (TARGET_SIZE[1] - img.height) // 2)
-    canvas.paste(img, offset, img)
-    return canvas.convert("RGB")
+    if img.mode in ("RGBA", "LA", "P"):
+        # Flatten transparency onto white before cropping; JPEG has no alpha.
+        img = img.convert("RGBA")
+        canvas = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        canvas.paste(img, (0, 0), img)
+        img = canvas
+    return ImageOps.fit(img.convert("RGB"), TARGET_SIZE, Image.LANCZOS)
 
 
 async def run_image_pipeline(
@@ -98,7 +105,7 @@ async def run_image_pipeline(
     Steps:
       1. Preprocess (background removal)
       2. Dispatch on ``ShopSettings.image_workflow_mode``:
-           - ``jewelry_9`` → 3 mannequin + 3 concept + 3 chart set
+           - ``jewelry_9`` → 4 mannequin + 3 concept + 3 chart set
            - otherwise    → legacy 5-lifestyle loop
       3. Save files + DB records with rank ordering
       4. Assign alt text
@@ -233,7 +240,7 @@ async def _run_legacy_pipeline(
     logger.info("image_pipeline_done", sku=sku, total_cost=total_cost)
 
 
-# ── Jewelry-9 (3 mannequin + 3 concept + 3 chart) ───────────────────────────
+# ── Jewelry-9 (4 mannequin + 3 concept + 3 chart) ───────────────────────────
 
 
 def _save_ai_shot(
@@ -263,11 +270,11 @@ async def _run_jewelry_9_pipeline(
 
     Rank ordering (as specified in OPERATIONAL_INTEGRATION_FOLLOWUP.md):
       1        cover photo (best mannequin, auto-cropped)
-      2..3     other mannequin shots
-      4..6     concept shots
-      7        size chart
-      8        birthstone chart (only if warranted)
-      9        care instructions chart
+      2..4     other mannequin shots
+      5..7     concept shots
+      8        size chart
+      9        birthstone chart (only if warranted)
+      10       care instructions chart
     """
     sku = product.sku
     reference_image = Image.open(preprocessed_path).convert("RGBA")

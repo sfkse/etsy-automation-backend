@@ -17,6 +17,13 @@ class ImageGenerationRequest:
     style_hint: str
     num_outputs: int = 1
     seed: int | None = None
+    # Backends that let the model choose a ratio will drift to landscape on any
+    # prompt that reads as a wide scene (an overhead flat lay, "generous empty
+    # space"), and the pipeline letterboxes that onto its square canvas with
+    # white bars rather than cropping it. Pin it instead of fighting it with
+    # prompt wording. Etsy listings want square; "1:1" matches
+    # ``pipeline.TARGET_SIZE`` exactly, so nothing is padded.
+    aspect_ratio: str = "1:1"
     extra_params: dict = field(default_factory=dict)
 
 

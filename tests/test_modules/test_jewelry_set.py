@@ -1,8 +1,8 @@
 """Tests for jewelry_set.generate_jewelry_set (PR 4).
 
 Uses MagicMock/AsyncMock to stub every AbstractImageGenerator call so the
-suite runs offline. Verifies the 3+3+3 shape, chart selection heuristic,
-and that all 6 AI calls dispatch concurrently via asyncio.gather.
+suite runs offline. Verifies the 4+3+3 shape, chart selection heuristic,
+and that all 7 AI calls dispatch concurrently via asyncio.gather.
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def _session_returning(preset=None, personalization=None) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_generates_3_mannequin_3_concept_and_3_charts_when_birthstone(tmp_path):
+async def test_generates_4_mannequin_3_concept_and_3_charts_when_birthstone(tmp_path):
     preset = VariationPreset(id=1, name="p", lengths_inches=[16, 18, 20])
     personalization = PersonalizationTemplate(
         id=1,
@@ -97,7 +97,7 @@ async def test_generates_3_mannequin_3_concept_and_3_charts_when_birthstone(tmp_
             include_charts=True,
         )
 
-    assert len(result.mannequin_shots) == 3
+    assert len(result.mannequin_shots) == 4
     assert len(result.concept_shots) == 3
     assert result.size_chart is not None
     assert result.birthstone_chart is not None
@@ -167,7 +167,7 @@ async def test_selected_palette_flows_into_prompts_and_style_hint(tmp_path):
             palette=palette_key,
         )
 
-    assert len(captured) == 6
+    assert len(captured) == 7
     all_prompts = " ".join(r.prompt for r in captured)
     assert pal.background in all_prompts
     assert pal.lighting in all_prompts
@@ -195,5 +195,5 @@ async def test_unknown_palette_falls_back_to_default(tmp_path):
             palette="does-not-exist",
         )
 
-    assert len(result.mannequin_shots) == 3
+    assert len(result.mannequin_shots) == 4
     assert len(result.concept_shots) == 3

@@ -40,6 +40,9 @@ def generate_alt_text(product: Product, image: ProductImage) -> str:
         label = f"gift for {recipient}" if recipient else "gift"
         return f"{main_keyword} - {label}"
     elif rank == 8:
-        return f"{main_keyword} - gift box presentation"
+        # jewelry_9 layout: ranks 5-7 are the concept shots, so the first chart
+        # (size) lands here. The old "gift box presentation" text predates that
+        # layout and no gift box shot exists any more.
+        return f"{main_keyword} - size chart"
     else:
         return main_keyword
