@@ -13,7 +13,7 @@ import asyncio
 import shutil
 from pathlib import Path as _DeletePath
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, selectinload
@@ -34,6 +34,15 @@ from src.modules.images import regen_jobs
 from src.modules.images.comparison import run_comparison
 from src.modules.images.jewelry_set import DEFAULT_PALETTE, palette_choices
 from src.modules.images.pipeline import run_image_pipeline
+from src.modules.images.static_assets import (
+    asset_stem,
+    attach_asset,
+    attached_assets,
+    detach_asset,
+    list_assets,
+    remove_from_library,
+    save_uploaded_asset,
+)
 from src.modules.images.regenerate import (
     SLOT_ORDER,
     _slot_path,
@@ -45,7 +54,7 @@ from src.modules.images.regenerate import (
 from src.modules.video import video_jobs
 from src.modules.video.factory import DURATION_OPTIONS, VideoWorkflowFactory
 from src.modules.video.generate import (
-    DEFAULT_MOTION_PROMPT,
+    default_motion_prompt_for_slot,
     generate_slot_video,
     video_path,
 )
@@ -464,6 +473,7 @@ async def images_page(
             "workflow": row.workflow_source if row else None,
             "instructions": (row.regen_instructions if row else "") or "",
             "palette": (row.palette_used if row else None) or default_palette,
+            "default_motion_prompt": default_motion_prompt_for_slot(slot),
         })
 
     return _tmpl(
@@ -474,7 +484,7 @@ async def images_page(
             "workflows": ["gemini", "openai"],
             "palettes": palette_choices(),
             "default_palette": default_palette,
-            "default_motion_prompt": DEFAULT_MOTION_PROMPT,
+            "attached_assets": _attached_asset_items(product, session),
             "video_models": VideoWorkflowFactory.available_workflows(),
             "video_duration_options": DURATION_OPTIONS,
             "status_labels": STATUS_LABELS,
@@ -575,6 +585,115 @@ async def images_status(
         }
 
     return JSONResponse({"slots": slots, "any_running": bool(running)})
+
+
+# ── Common images (asset library) ────────────────────────────────────────────
+
+
+def _attached_asset_items(product: Product, session: Session) -> list[dict]:
+    return [
+        {
+            "image_id": row.id,
+            "stem": asset_stem(row),
+            "label": asset_stem(row).replace("_", " ").replace("-", " ").title(),
+            "url": _slot_public_url(row.file_path),
+        }
+        for row in attached_assets(product, session)
+    ]
+
+
+@router.get("/{sku}/assets")
+async def assets_list(sku: str, session: Session = Depends(get_session)):
+    """The asset library plus what this product already has attached."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse({
+        "library": list_assets(_settings),
+        "attached": _attached_asset_items(product, session),
+    })
+
+
+@router.post("/{sku}/assets")
+async def assets_attach(
+    sku: str,
+    name: str = Form(...),
+    session: Session = Depends(get_session),
+):
+    """Add one library image to the product (idempotent)."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    # Off the event loop: decoding + re-encoding a multi-MB PNG takes a moment.
+    row = await asyncio.to_thread(attach_asset, product, session, _settings, name)
+    if row is None:
+        return JSONResponse({"error": f"{name!r} is not in the asset library"}, status_code=404)
+    session.commit()
+    return JSONResponse({"attached": _attached_asset_items(product, session)})
+
+
+@router.delete("/{sku}/assets/{image_id}")
+async def assets_detach(
+    sku: str,
+    image_id: int,
+    session: Session = Depends(get_session),
+):
+    """Remove an attached library image from the product."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not detach_asset(product, session, image_id):
+        return JSONResponse({"error": "not an attached asset"}, status_code=404)
+    session.commit()
+    return JSONResponse({"attached": _attached_asset_items(product, session)})
+
+
+@router.post("/{sku}/assets/library")
+async def assets_upload(
+    sku: str,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+):
+    """Add a new image to the shared library (not product-specific — ``sku``
+    is only used to shape the response like the other asset endpoints)."""
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    data = await file.read()
+    try:
+        # Off the event loop: decoding + re-encoding the upload takes a moment.
+        await asyncio.to_thread(save_uploaded_asset, _settings, file.filename or "asset", data)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    return JSONResponse({
+        "library": list_assets(_settings),
+        "attached": _attached_asset_items(product, session),
+    })
+
+
+@router.delete("/{sku}/assets/library/{name}")
+async def assets_remove_from_library(
+    sku: str,
+    name: str,
+    session: Session = Depends(get_session),
+):
+    """Remove an image from the shared library.
+
+    Leaves any product's already-attached copy alone (``attach_asset`` copies
+    the file into that product's own folder) — this only affects what future
+    attaches can choose from.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    if not remove_from_library(_settings, name):
+        return JSONResponse({"error": f"{name!r} is not in the asset library"}, status_code=404)
+    return JSONResponse({
+        "library": list_assets(_settings),
+        "attached": _attached_asset_items(product, session),
+    })
 
 
 @router.post("/{sku}/images/compare")

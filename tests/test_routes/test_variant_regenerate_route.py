@@ -1,18 +1,25 @@
-"""Tests for POST /approval/{sku}/variant/{vid}/regenerate.
+"""Tests for POST /approval/{sku}/variant/{vid}/regenerate + GET /regen/status.
 
 Same harness as test_approval.py: a minimal app mounting only the approval
 router, with a MagicMock session returning one hand-built Product. The
-orchestrator builder is patched out so no LLM client is constructed.
+orchestrator builder is patched out so no LLM client is constructed, and the
+background worker's SessionLocal is patched to hand back the same session.
+TestClient runs background tasks before returning, so the job is finished by
+the time the POST call returns.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.db.dependencies import get_session
 from src.db.models import Product, ProductStatus
+from src.modules.content import regen_jobs
 from src.modules.llm.angles import ANGLE_CONSERVATIVE
 from src.web.routes import approval as approval_routes
 
@@ -71,10 +78,33 @@ def _make_session(product: Product | None) -> MagicMock:
     return session
 
 
+@pytest.fixture(autouse=True)
+def _clear_jobs():
+    regen_jobs._JOBS.clear()
+    yield
+    regen_jobs._JOBS.clear()
+
+
+_SESSIONS: list = []
+
+
+@pytest.fixture(autouse=True)
+def _bg_session():
+    """Background worker opens SessionLocal(); hand it the test's session."""
+    @contextmanager
+    def factory():
+        yield _SESSIONS[-1]
+
+    with patch("src.db.session.SessionLocal", side_effect=factory):
+        yield
+    _SESSIONS.clear()
+
+
 def _client(product: Product | None):
     app = FastAPI()
     app.include_router(approval_routes.router)
     session = _make_session(product)
+    _SESSIONS.append(session)
     app.dependency_overrides[get_session] = lambda: session
     return TestClient(app), session
 
@@ -96,6 +126,23 @@ def _post(client, sku="TAKI-0042", vid="A", field="tags"):
     )
 
 
+def _job(client, vid="A", field="tags", sku="TAKI-0042") -> dict:
+    return client.get(f"/approval/{sku}/regen/status").json()["jobs"][f"{vid}:{field}"]
+
+
+def test_post_starts_job_and_returns_immediately():
+    product = _product()
+    client, _ = _client(product)
+
+    with patch(
+        "src.web.routes.content._build_orchestrator", return_value=_orchestrator()
+    ):
+        resp = _post(client, field="tags")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "started", "variant": "A", "field": "tags"}
+
+
 def test_regenerates_tags_and_persists_them():
     product = _product()
     client, _ = _client(product)
@@ -105,14 +152,39 @@ def test_regenerates_tags_and_persists_them():
         "src.web.routes.content._build_orchestrator",
         return_value=_orchestrator(new_tags=new_tags),
     ):
-        resp = _post(client, field="tags")
+        _post(client, field="tags")
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["regenerated"] is True
-    assert body["updates"]["tags"] == new_tags
+    job = _job(client)
+    assert job["running"] is False and job["error"] is None
+    assert job["result"]["updates"]["tags"] == new_tags
     # Written back into the stored variant, not just returned.
     assert product.generated_variants[0]["tags"] == new_tags
+
+
+def test_finished_job_is_reported_once():
+    product = _product()
+    client, _ = _client(product)
+
+    with patch(
+        "src.web.routes.content._build_orchestrator", return_value=_orchestrator()
+    ):
+        _post(client, field="tags")
+
+    first = client.get("/approval/TAKI-0042/regen/status").json()
+    second = client.get("/approval/TAKI-0042/regen/status").json()
+    assert "A:tags" in first["jobs"]
+    assert second == {"jobs": {}, "any_running": False}
+
+
+def test_already_running_field_is_rejected():
+    product = _product()
+    client, _ = _client(product)
+    regen_jobs.mark_running("TAKI-0042", "A", "tags")
+
+    resp = _post(client, field="tags")
+
+    assert resp.status_code == 409
+    assert "already regenerating" in resp.json()["error"]
 
 
 def test_other_variants_are_untouched():
@@ -140,16 +212,17 @@ def test_ctr_signal_is_refreshed_alongside_tags():
     assert product.generated_variants[0]["estimated_ctr_signal"] == "high"
 
 
-def test_response_carries_validation_of_the_new_value():
+def test_result_carries_validation_of_the_new_value():
     product = _product()
     client, _ = _client(product)
 
     with patch(
         "src.web.routes.content._build_orchestrator", return_value=_orchestrator()
     ):
-        body = _post(client, field="tags").json()
+        _post(client, field="tags")
 
-    assert "valid" in body and "violations" in body
+    result = _job(client)["result"]
+    assert "valid" in result and "violations" in result
 
 
 def test_hybrid_variant_is_rejected():
@@ -194,7 +267,7 @@ def test_missing_product_returns_404():
     assert resp.status_code == 404
 
 
-def test_generator_failure_surfaces_as_500_with_reason():
+def test_generator_failure_is_recorded_on_the_job():
     product = _product()
     client, _ = _client(product)
     orch = _orchestrator()
@@ -203,7 +276,9 @@ def test_generator_failure_surfaces_as_500_with_reason():
     with patch("src.web.routes.content._build_orchestrator", return_value=orch):
         resp = _post(client, field="tags")
 
-    assert resp.status_code == 500
-    assert "LLM exploded" in resp.json()["error"]
+    assert resp.status_code == 200  # the failure happens in the background
+    job = _job(client)
+    assert job["running"] is False
+    assert "LLM exploded" in job["error"]
     # The stored variant is left as it was.
     assert product.generated_variants[0]["tags"] == TAGS

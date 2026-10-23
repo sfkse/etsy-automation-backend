@@ -19,7 +19,7 @@ import zipfile
 from pathlib import Path
 
 import structlog
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
@@ -44,11 +44,13 @@ from src.modules.approval.service import (
     update_variant_field,
     validate_field,
 )
+from src.modules.content import regen_jobs
 from src.modules.content.regenerate import (
     REGENERABLE_FIELDS,
     RegenerationError,
     regenerate_variant_field,
 )
+from src.modules.llm.angles import angle_for_label
 from src.modules.etsy.payload_builder import EtsyListingPayloadBuilder
 
 _log = structlog.get_logger(__name__)
@@ -530,19 +532,22 @@ async def autosave_variant_field(
     return JSONResponse({"saved": True, "valid": ok, "violations": violations})
 
 
-# ── Per-field regeneration (JSON POST) ────────────────────────────────────────
+# ── Per-field regeneration (background task + polling) ───────────────────────
 
 @router.post("/{sku}/variant/{variant_id}/regenerate")
 async def regenerate_variant_field_endpoint(
     sku: str,
     variant_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ):
-    """Redo ONE field of ONE variant. Costs a single LLM call; no re-scrape.
+    """Kick off a regeneration of ONE field of ONE variant as a background task.
 
-    Runs inline rather than as a background task: one field is one call, so the
-    caller can hold a spinner instead of polling a progress page.
+    Returns immediately with ``{"status": "started"}``; the page polls
+    ``/approval/{sku}/regen/status`` for the result, the same way the images
+    page tracks slot regenerations. Cheap checks (field, variant, angle) run
+    here so bad requests still fail synchronously.
     """
     product = session.query(Product).filter_by(sku=sku).first()
     if product is None:
@@ -560,37 +565,93 @@ async def regenerate_variant_field_endpoint(
     if variant is None:
         return JSONResponse({"error": "variant not found"}, status_code=404)
 
+    label = variant.get("strategy_label", "")
+    if angle_for_label(label, variant_letter=variant_id) is None:
+        # HYBRID is user-composed — there is no angle to generate against.
+        return JSONResponse(
+            {
+                "error": f"Variant {variant_id} ({label or 'no strategy'}) has no "
+                "strategic angle to regenerate from"
+            },
+            status_code=409,
+        )
+
+    if regen_jobs.is_running(sku, variant_id, field):
+        return JSONResponse(
+            {"error": f"{field} of variant {variant_id} is already regenerating"},
+            status_code=409,
+        )
+
+    regen_jobs.mark_running(sku, variant_id, field)
+    background_tasks.add_task(_regenerate_variant_bg, sku, variant_id, field)
+    return JSONResponse({"status": "started", "variant": variant_id, "field": field})
+
+
+async def _regenerate_variant_bg(sku: str, variant_id: str, field: str) -> None:
+    """Background worker: regenerate one field with its own DB session.
+
+    Always clears the running flag (recording the result or the error) so a
+    field can never spin forever.
+    """
+    from src.db.session import SessionLocal
     # Built here rather than at import time — it opens an LLM client.
     from src.web.routes.content import _build_orchestrator
 
+    result: dict | None = None
+    error: str | None = None
     try:
-        result = await regenerate_variant_field(
-            product, variant, field, _build_orchestrator(session), session=session
-        )
+        with SessionLocal() as bg_session:
+            product = bg_session.query(Product).filter_by(sku=sku).first()
+            variant = get_variant_by_id(product, variant_id) if product else None
+            if variant is None:
+                error = "Product or variant no longer exists"
+                return
+
+            regen = await regenerate_variant_field(
+                product, variant, field, _build_orchestrator(bg_session),
+                session=bg_session,
+            )
+            # Persist field by field so a regen never clobbers an unsaved inline
+            # edit to a field it did not touch.
+            for name, value in regen["updates"].items():
+                update_variant_field(bg_session, product, variant_id, name, value)
+
+            updated = regen["updates"]
+            ok, violations = validate_field(
+                field,
+                updated.get(field),
+                paired_title=updated.get("title", variant.get("title", "")),
+            )
+            result = {
+                "updates": updated,
+                "notes": regen["notes"],
+                "valid": ok,
+                "violations": violations,
+            }
     except RegenerationError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
+        error = str(exc)
     except Exception as exc:  # noqa: BLE001 — surface the reason to the UI
         _log.exception("variant_regen_failed", sku=sku, variant=variant_id, field=field)
-        return JSONResponse({"error": f"Regeneration failed: {exc}"}, status_code=500)
+        error = f"Regeneration failed: {exc}"
+    finally:
+        regen_jobs.mark_done(sku, variant_id, field, result=result, error=error)
 
-    # Persist field by field so a regen never clobbers an unsaved inline edit to
-    # a field it did not touch.
-    for name, value in result["updates"].items():
-        update_variant_field(session, product, variant_id, name, value)
 
-    updated = result["updates"]
-    ok, violations = validate_field(
-        field,
-        updated.get(field),
-        paired_title=updated.get("title", variant.get("title", "")),
-    )
+@router.get("/{sku}/regen/status")
+async def regen_status(sku: str):
+    """Per-field regeneration jobs for JS polling on the approval page.
+
+    Finished jobs are reported once and then forgotten, so a reload doesn't
+    re-apply an old result over text the user has since edited.
+    """
+    jobs = regen_jobs.jobs_for(sku)
+    for key, job in jobs.items():
+        if not job["running"]:
+            variant_id, field = key.split(":", 1)
+            regen_jobs.clear(sku, variant_id, field)
     return JSONResponse({
-        "regenerated": True,
-        "field": field,
-        "updates": updated,
-        "notes": result["notes"],
-        "valid": ok,
-        "violations": violations,
+        "jobs": jobs,
+        "any_running": any(j["running"] for j in jobs.values()),
     })
 
 

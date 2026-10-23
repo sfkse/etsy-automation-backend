@@ -89,3 +89,41 @@ def test_seed_universal_keywords_no_log_when_nothing_inserted():
     with patch.object(seed_shop_defaults, "_log") as mock_log:
         seed_shop_defaults.seed_universal_keywords(session)
     mock_log.info.assert_not_called()
+
+
+def test_description_templates_split_necklace_by_material():
+    session = _empty_session()
+    seed_shop_defaults.seed_description_templates(session)
+    keys = {
+        (c.args[0].category, c.args[0].material_type)
+        for c in session.add.call_args_list
+    }
+    assert keys == {
+        ("necklace", "brass"),
+        ("necklace", "silver_925"),
+        ("ring", "any"),
+    }
+    by_material = {
+        c.args[0].material_type: c.args[0]
+        for c in session.add.call_args_list
+        if c.args[0].category == "necklace"
+    }
+    assert "Brass" in by_material["brass"].section_materials
+    assert "925 Sterling Silver" in by_material["silver_925"].section_materials
+    assert "Choose necklace length" not in by_material["brass"].section_how_to_order
+    assert "Choose necklace length" in by_material["silver_925"].section_how_to_order
+
+
+def test_description_templates_upgrade_legacy_but_keep_user_edits():
+    row = MagicMock()
+    for field in seed_shop_defaults._UPGRADABLE_FIELDS:
+        setattr(row, field, "My own custom text")
+    row.section_how_to_order = "**How to Order**\n1. Choose finish."
+    session = MagicMock()
+    session.query.return_value.filter_by.return_value.first.return_value = row
+
+    seed_shop_defaults.seed_description_templates(session)
+
+    assert "H O W - T O - O R D E R" in row.section_how_to_order
+    assert row.section_packaging == "My own custom text"
+    assert session.add.call_count == 0

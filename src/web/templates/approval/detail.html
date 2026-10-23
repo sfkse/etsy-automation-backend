@@ -175,7 +175,7 @@
                       data-field="description"
                       data-variant="{{ vid }}"
                       id="description-{{ vid }}"
-                      rows="8"
+                      rows="60"
                       style="font-size:.8rem; resize:vertical;">{{ v.get('description', '') }}</textarea>
           </div>
 
@@ -266,7 +266,7 @@
           {% endif %}
           {% if images %}
           <div class="d-flex flex-wrap gap-2">
-            {% for img in images[:9] %}
+            {% for img in images %}
             <div class="rounded overflow-hidden border" style="width:64px;height:64px;flex-shrink:0;">
               {% if img.file_path %}
               {% set fname = img.file_path.split('/')[-1] %}
@@ -492,6 +492,7 @@
   .regen-note:empty { display: none; }
   .regen-btn { line-height: 1; text-decoration: none; font-size: .95rem; }
   .regen-btn:disabled { opacity: .5; }
+  .regen-busy { opacity: .55; }
   .save-indicator { font-size:.7rem; color:#198754; }
   .save-error { font-size:.7rem; color:#dc3545; }
   .hybrid-field-row { border-bottom: 1px solid #dee2e6; padding: 8px 0; }
@@ -590,9 +591,10 @@ function showViolations(variantId, field, violations) {
   }
 }
 
-// ── Per-field regeneration (POST) ─────────────────────────────────────────────
-// One field of one variant = one LLM call, so this runs inline with a spinner
-// instead of the background-task + progress-page flow the full pipeline uses.
+// ── Per-field regeneration (background task + polling) ────────────────────────
+// Regenerate runs as a background task on the server; the page polls
+// /regen/status (like the images page) so other work isn't blocked, the
+// spinner survives a reload, and the new text swaps in when it's ready.
 function setFieldValue(variantId, field, value) {
   const el = document.getElementById(
     (field === 'description' ? 'description' : field) + '-' + variantId
@@ -616,15 +618,89 @@ function showRegenNote(variantId, field, notes) {
     : '';
 }
 
+function regenButton(variantId, field) {
+  return document.querySelector(
+    `.regen-btn[data-variant="${variantId}"][data-field="${field}"]`
+  );
+}
+
+function fieldEl(variantId, field) {
+  return document.getElementById(
+    (field === 'description' ? 'description' : field) + '-' + variantId
+  );
+}
+
+// Lock the button and the field itself while the server rewrites it, so an
+// inline edit can't be silently overwritten when the result lands.
+function setRegenBusy(variantId, field, busy) {
+  const btn = regenButton(variantId, field);
+  if (btn) {
+    if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+    btn.disabled = busy;
+    btn.textContent = busy ? '⏳' : btn.dataset.label;
+  }
+  const el = fieldEl(variantId, field);
+  if (el) {
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') el.readOnly = busy;
+    else el.contentEditable = busy ? 'false' : 'true';
+    el.classList.toggle('regen-busy', busy);
+  }
+  if (busy) showRegenNote(variantId, field, ['Regenerating…']);
+}
+
+function applyRegenResult(variantId, field, job) {
+  setRegenBusy(variantId, field, false);
+  if (job.error) {
+    showRegenNote(variantId, field, [job.error]);
+    return;
+  }
+  const result = job.result || {};
+  // A title regen can also return cleaned-up tags, so apply every field the
+  // server actually changed — not just the one that was clicked.
+  Object.entries(result.updates || {}).forEach(([name, value]) => {
+    if (name === 'estimated_ctr_signal') return;
+    setFieldValue(variantId, name, value);
+  });
+  updateCounts(variantId);
+  showViolations(variantId, field, result.violations || []);
+  showRegenNote(variantId, field, result.notes || []);
+}
+
+const regenRunning = {};   // "A:description" -> true while we're waiting on it
+let regenPoller = null;
+
+async function pollRegenStatus() {
+  let data;
+  try {
+    const resp = await fetch(`/approval/${SKU}/regen/status`);
+    data = await resp.json();
+  } catch (e) { return; }
+
+  Object.entries(data.jobs || {}).forEach(([key, job]) => {
+    const [variantId, field] = key.split(':');
+    if (job.running) {
+      if (!regenRunning[key]) setRegenBusy(variantId, field, true);
+      regenRunning[key] = true;
+    } else {
+      applyRegenResult(variantId, field, job);
+      delete regenRunning[key];
+    }
+  });
+
+  if (data.any_running || Object.keys(regenRunning).length) {
+    if (!regenPoller) regenPoller = setInterval(pollRegenStatus, 2000);
+  } else if (regenPoller) {
+    clearInterval(regenPoller);
+    regenPoller = null;
+  }
+}
+
 async function regenerateField(btn) {
   const variantId = btn.dataset.variant;
   const field = btn.dataset.field;
-  const original = btn.textContent;
+  const key = `${variantId}:${field}`;
 
-  btn.disabled = true;
-  btn.textContent = '⏳';
-  showRegenNote(variantId, field, []);
-
+  setRegenBusy(variantId, field, true);
   try {
     const resp = await fetch(`/approval/${SKU}/variant/${variantId}/regenerate`, {
       method: 'POST',
@@ -632,32 +708,27 @@ async function regenerateField(btn) {
       body: JSON.stringify({ field }),
     });
     const data = await resp.json();
-
     if (!resp.ok) {
+      setRegenBusy(variantId, field, false);
       showRegenNote(variantId, field, [data.error || 'Regeneration failed']);
       return;
     }
-
-    // A title regen can also return cleaned-up tags, so apply every field the
-    // server actually changed — not just the one that was clicked.
-    Object.entries(data.updates || {}).forEach(([name, value]) => {
-      if (name === 'estimated_ctr_signal') return;
-      setFieldValue(variantId, name, value);
-    });
-    updateCounts(variantId);
-    showViolations(variantId, field, data.violations || []);
-    showRegenNote(variantId, field, data.notes || []);
   } catch (e) {
+    setRegenBusy(variantId, field, false);
     showRegenNote(variantId, field, [`Network error: ${e.message}`]);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = original;
+    return;
   }
+  // Server has marked the job running; the poller drives the rest.
+  regenRunning[key] = true;
+  if (!regenPoller) regenPoller = setInterval(pollRegenStatus, 2000);
 }
 
 document.querySelectorAll('.regen-btn').forEach(btn => {
   btn.addEventListener('click', () => regenerateField(btn));
 });
+
+// Restore spinners for jobs still running from before a reload.
+pollRegenStatus();
 
 
 document.querySelectorAll('.editable-field').forEach(el => {

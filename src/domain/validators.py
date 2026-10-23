@@ -4,6 +4,7 @@ Business-rule validators for titles, tags, and descriptions.
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter
 
 from sklearn.metrics.pairwise import cosine_similarity
@@ -13,8 +14,6 @@ from src.config.business_rules import (
     BROAD_TAG_TERMS,
     CLICHE_DESCRIPTION_PHRASES,
     DESCRIPTION_MAX_SIMILARITY,
-    DESCRIPTION_MAX_WORDS,
-    DESCRIPTION_MIN_WORDS,
     FORBIDDEN_TAG_PHRASES,
     FORBIDDEN_TITLE_KEYWORDS,
     FORBIDDEN_TITLE_KEYWORD_EXCEPTIONS,
@@ -366,18 +365,16 @@ def validate_variant_divergence(
 
 def validate_description(description: str) -> tuple[bool, list[str]]:
     """
-    Validate *description* against Section 1.3 business rules:
-    word count (150-220) and absence of cliché phrases.
+    Validate *description* against Section 1.3 business rules: absence of
+    cliché phrases.
+
+    No word-count rule: the full description is the short LLM intro wrapped in
+    the DescriptionEngine scaffold, so its length is set by the template, not
+    the copywriter. The intro's own length is enforced in DescriptionGenerator.
 
     Returns ``(is_valid, violations)``.
     """
     violations: list[str] = []
-
-    word_count = len(description.split())
-    if not (DESCRIPTION_MIN_WORDS <= word_count <= DESCRIPTION_MAX_WORDS):
-        violations.append(
-            f"Word count {word_count} not in [{DESCRIPTION_MIN_WORDS}, {DESCRIPTION_MAX_WORDS}]"
-        )
 
     desc_lower = description.lower()
     for phrase in CLICHE_DESCRIPTION_PHRASES:
@@ -385,6 +382,23 @@ def validate_description(description: str) -> tuple[bool, list[str]]:
             violations.append(f"Cliché phrase found: '{phrase}'")
 
     return (len(violations) == 0, violations)
+
+
+# One SentenceTransformer per process. A checker is built per request (see
+# routes/content._build_orchestrator), and loading the model takes seconds —
+# doing it on every description regeneration froze the server.
+_model_lock = threading.Lock()
+_model_cache: dict[tuple[object, str], SentenceTransformer] = {}
+
+
+def _shared_model(name: str) -> SentenceTransformer:
+    # Keyed by the class too, so tests that patch SentenceTransformer get a
+    # fresh mock instead of a model cached by an earlier test.
+    key = (SentenceTransformer, name)
+    with _model_lock:
+        if key not in _model_cache:
+            _model_cache[key] = SentenceTransformer(name)
+        return _model_cache[key]
 
 
 class OriginalityChecker:
@@ -404,7 +418,7 @@ class OriginalityChecker:
     @property
     def model(self) -> SentenceTransformer:
         if self._model is None:
-            self._model = SentenceTransformer(self._MODEL_NAME)
+            self._model = _shared_model(self._MODEL_NAME)
         return self._model
 
     def check(

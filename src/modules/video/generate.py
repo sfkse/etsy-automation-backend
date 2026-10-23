@@ -32,13 +32,84 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["DEFAULT_MOTION_PROMPT", "generate_slot_video", "video_path", "SLOT_ORDER"]
+__all__ = [
+    "DEFAULT_MOTION_PROMPT",
+    "default_motion_prompt_for_slot",
+    "generate_slot_video",
+    "video_path",
+    "SLOT_ORDER",
+]
 
+# Fallback for a slot that isn't in SLOT_MOTION_PROMPTS (shouldn't happen for a
+# valid slot, but keeps _effective_motion_prompt total).
 DEFAULT_MOTION_PROMPT = (
     "Subtle cinematic motion: a slow, smooth push-in with soft light gently "
     "shifting across the jewelry and a faint sparkle on the metal and stones. "
     "Keep the product sharp, centered and unchanged; no warping, no extra objects."
 )
+
+# Each slot's motion prompt mirrors what's actually in that shot (see
+# build_mannequin_prompts / build_concept_prompts in jewelry_set.py) rather than
+# one generic "push-in" applied to every pose — a hand holding a pendant should
+# not animate the same way as an overhead flat lay.
+SLOT_MOTION_PROMPTS: dict[str, str] = {
+    # M1 — intimate macro, hand holding the pendant near the collarbone (cover)
+    "mannequin-1": (
+        "Subtle cinematic motion: the hand holding the pendant stays still while "
+        "the camera does a slow, soft push-in toward the pendant, light shifting "
+        "gently across the metal for a faint sparkle on the stones. Keep the "
+        "pendant sharp, centered and unchanged; no warping, no extra objects, no "
+        "new hand movement, face stays out of frame."
+    ),
+    # M2 — side three-quarter profile, worn on the neck/collarbone
+    "mannequin-2": (
+        "Subtle cinematic motion: a slow, smooth camera drift around the "
+        "collarbone profile, soft light sweeping gently across the pendant and "
+        "chain to catch a faint sparkle on the metal. Keep the jewelry sharp and "
+        "unchanged; no warping, no extra objects, face stays out of frame."
+    ),
+    # M3 — straight-on frontal macro, pendant in the hollow of the throat
+    "mannequin-3": (
+        "Subtle cinematic motion: a gentle, breathing-like rise and fall of the "
+        "chest, warm light slowly raking across the skin and pendant to catch a "
+        "faint sparkle on the metal. Keep the pendant sharp, centered and "
+        "unchanged; no warping, no extra objects, face stays out of frame."
+    ),
+    # M4 — both hands lifting the chain off the skin to show drape/length
+    "mannequin-4": (
+        "Subtle cinematic motion: the fingertips hold their grip while the "
+        "chain sways with a soft, natural pendulum motion, light shifting gently "
+        "across the links for a faint sparkle. Keep the jewelry sharp and "
+        "unchanged; no warping, no extra objects, no new hand movement."
+    ),
+    # C1 — overhead flat lay, chain gathered into a teardrop shape
+    "concept-1": (
+        "Subtle cinematic motion: a slow overhead camera drift across the "
+        "flat-laid necklace, soft light sweeping over the chain and pendant to "
+        "reveal a faint sparkle on the metal. Keep the product sharp, centered "
+        "and unchanged; no warping, no extra objects, nothing shifting on the "
+        "surface."
+    ),
+    # C2 — resting on the surface edge with a fabric drape, three-quarter angle
+    "concept-2": (
+        "Subtle cinematic motion: a slow, smooth push-in toward the pendant "
+        "while the draped fabric behind it sways ever so slightly, soft light "
+        "shifting gently across the metal for a faint sparkle. Keep the product "
+        "sharp and unchanged; no warping, no extra objects."
+    ),
+    # C3 — macro pendant detail on the surface, background dissolved to bokeh
+    "concept-3": (
+        "Subtle cinematic motion: a slow push-in on the macro pendant detail "
+        "while the background bokeh softly breathes, light shifting gently "
+        "across the metal finish for a faint sparkle. Keep the pendant sharp, "
+        "centered and unchanged; no warping, no extra objects."
+    ),
+}
+
+
+def default_motion_prompt_for_slot(slot: str) -> str:
+    """The motion prompt that matches this slot's actual pose/composition."""
+    return SLOT_MOTION_PROMPTS.get(slot, DEFAULT_MOTION_PROMPT)
 
 
 def video_path(product: Product, settings: Settings, slot: str) -> Path:
@@ -46,11 +117,12 @@ def video_path(product: Product, settings: Settings, slot: str) -> Path:
     return _ai_dir(product, settings) / "videos" / f"{product.sku.lower()}-{slot}.mp4"
 
 
-def _effective_motion_prompt(user_prompt: str | None) -> str:
-    """The field is pre-filled with the default, so 'override or append' is just
-    whatever the user left in it; fall back to the default only if it is empty."""
+def _effective_motion_prompt(user_prompt: str | None, slot: str) -> str:
+    """The field is pre-filled with this slot's default, so 'override or append'
+    is just whatever the user left in it; fall back to the slot's own default
+    (not a generic one) only if it is empty."""
     user_prompt = (user_prompt or "").strip()
-    return user_prompt or DEFAULT_MOTION_PROMPT
+    return user_prompt or default_motion_prompt_for_slot(slot)
 
 
 def _public_image_url(settings: Settings, image_path: Path) -> str:
@@ -96,7 +168,7 @@ async def generate_slot_video(
     result = await generator.generate(
         VideoGenerationRequest(
             image_url=image_url,
-            prompt=_effective_motion_prompt(prompt),
+            prompt=_effective_motion_prompt(prompt, slot),
             duration=duration,
         )
     )

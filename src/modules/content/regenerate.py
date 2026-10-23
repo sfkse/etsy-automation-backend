@@ -121,7 +121,7 @@ async def regenerate_variant_field(
         # Have a Question — comes from the DescriptionEngine scaffold, applied by
         # the listings pipeline after generation. Skipping it here replaced a
         # fully-formed description with a bare intro paragraph.
-        description, scaffolded = _apply_scaffold(product, description, session)
+        description, scaffolded = _apply_scaffold(product, description, session, title)
         if not scaffolded and _looks_scaffolded(variant.get("description", "")):
             notes.append(
                 "The previous description had operational sections (How to Order, "
@@ -152,7 +152,7 @@ async def regenerate_variant_field(
 
 
 def _apply_scaffold(
-    product: Product, llm_intro: str, session: Session | None
+    product: Product, llm_intro: str, session: Session | None, title: str = ""
 ) -> tuple[str, bool]:
     """Wrap ``llm_intro`` in the operational 8-section scaffold.
 
@@ -187,6 +187,7 @@ def _apply_scaffold(
         preset=preset,
         personalization=personalization,
         category=_category_from_preset(preset),
+        title=title,
     )
     return filled, filled != llm_intro
 
@@ -198,6 +199,11 @@ _SCAFFOLD_MARKERS = (
     "Best Gifts For",
     "Have a Question",
     "Packaging",
+    # ★★ house-style headers
+    "H O W - T O - O R D E R",
+    "B E S T - G I F T",
+    "H A V E - A - Q U E S T I O N",
+    "P A C K A G E",
 )
 
 

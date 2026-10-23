@@ -27,10 +27,13 @@ _daily = DailyCounter()
 
 
 class EtsyClient:
-    def __init__(self, token_manager: TokenManager, shop_id: str, api_key: str) -> None:
+    def __init__(
+        self, token_manager: TokenManager, shop_id: str, api_key: str, shared_secret: str
+    ) -> None:
         self.token_manager = token_manager
         self.shop_id = shop_id
         self._api_key = api_key
+        self._shared_secret = shared_secret
 
     # ── Low-level request ──────────────────────────────────────────────────────
 
@@ -50,7 +53,7 @@ class EtsyClient:
         token = await self.token_manager.get_valid_token()
         headers = {
             "Authorization": f"Bearer {token}",
-            "x-api-key": self._api_key,
+            "x-api-key": f"{self._api_key}:{self._shared_secret}",
         }
 
         async with httpx.AsyncClient(timeout=60) as client:

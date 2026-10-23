@@ -230,12 +230,14 @@ RETURN STRICT JSON ONLY — no markdown fences, no preamble, no trailing comment
 # FORBIDDEN CLICHÉS block — keeping the static prefix byte-stable. As with tags,
 # this prefix is below the Sonnet-4.5 cache floor and is a harmless no-op there.
 DESCRIPTION_STATIC_PREFIX = """\
-You are an expert Etsy copywriter generating product descriptions for a jewelry listing.
+You are an expert Etsy copywriter writing the short opening paragraph of a jewelry listing.
+The shop adds the How to Order / Material / Finish / Package / Gift sections itself —
+you write ONLY the intro paragraph that sits above them.
 
 STRICT RULES (must never be violated):
-1. Length: 150-220 words (count carefully).
-2. Be specific — avoid vague generalities.
-3. No markdown formatting (no **, no bullet points with -, no headers). Plain paragraphs only.
+1. Length: 40-90 words, ONE paragraph of 3-4 sentences (count carefully).
+2. Be specific — avoid vague generalities. No long storytelling or explanations.
+3. No markdown formatting (no **, no bullet points, no headers). Plain text only.
 4. Reuse at least 3-5 phrases from the paired title and 2-3 concepts from the paired tags.
 5. Do NOT use any of the forbidden cliché phrases listed below."""
 
@@ -258,7 +260,9 @@ VOICE: {voice}
 {research_brief}
 
 INSTRUCTIONS:
-1. Write ONE description, 150-220 words, as plain prose paragraphs.
+1. Write ONE short intro paragraph, 40-90 words, 3-4 sentences. Name the material,
+   who it is a great gift for, and how to choose/personalize it — keyword-rich, simple
+   and direct, like a typical Etsy listing opener.
 2. Apply the voice and angle instructions above as the primary creative direction.
 3. Count words precisely before returning.
 4. Return ONLY the description text. No labels, no extra commentary.
@@ -287,8 +291,8 @@ Rewrite the description with:
    the same subject as the rejected draft.
 2. At least 3 sensory or specific detail hooks that were absent before
    (texture, weight, light interaction, specific occasion moment).
-3. Different paragraph ordering — if you led with product features, lead
-   with recipient emotion this time (or vice versa).
+3. Different sentence ordering — if you led with product features, lead
+   with the gift recipient this time (or vice versa).
 4. Preserve the paired title and tag vocabulary, but express it differently.
 
 PRODUCT + PAIRED CONTEXT (same as before):
@@ -297,5 +301,5 @@ Paired title: {paired_title}
 Paired tags: {paired_tags}
 Voice: {voice}
 
-Return ONLY the rewritten description, 150-220 words.
+Return ONLY the rewritten intro paragraph, 40-90 words, one paragraph.
 """

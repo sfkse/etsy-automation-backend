@@ -27,6 +27,14 @@ def build_main_keyword(product: Product) -> str:
 def generate_alt_text(product: Product, image: ProductImage) -> str:
     """Generate SEO alt text based on image rank and product attributes."""
     main_keyword = build_main_keyword(product)
+
+    # Common library images (charts, care card) describe themselves — their
+    # rank depends on how many AI shots precede them.
+    source = image.workflow_source or ""
+    if source.startswith("asset:"):
+        label = source[len("asset:"):].replace("_", " ").replace("-", " ").strip()
+        return f"{main_keyword} - {label}" if label else main_keyword
+
     rank = image.rank or 0
 
     if rank == 1:

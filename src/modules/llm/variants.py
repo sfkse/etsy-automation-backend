@@ -19,7 +19,7 @@ class ListingVariant:
     strategy_rationale: str      # 1-2 sentences shown in the approval UI
     title: str                   # 137-140 chars
     tags: list[str]              # exactly 13
-    description: str             # 150-220 words
+    description: str             # 40-90 word intro, then ★★ scaffold sections
     estimated_ctr_signal: str    # "high" | "medium" | "low" | "unknown"
 
     def to_dict(self) -> dict:

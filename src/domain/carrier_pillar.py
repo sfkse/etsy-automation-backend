@@ -11,6 +11,7 @@ class CarrierPillar(str, Enum):
     BIRTH_FLOWER = "birth_flower"
     PET = "pet"
     PENDANT = "pendant"
+    CHAIN = "chain"
 
 
 _SECTION_NAMES: dict["CarrierPillar", str] = {
@@ -20,6 +21,7 @@ _SECTION_NAMES: dict["CarrierPillar", str] = {
     CarrierPillar.BIRTH_FLOWER: "Birth Flower Jewelry",
     CarrierPillar.PET:          "Pet Jewelry",
     CarrierPillar.PENDANT:      "Pendant Necklaces",
+    CarrierPillar.CHAIN:        "Chain Necklaces",
 }
 
 _DEFAULT_ATTRIBUTES: dict["CarrierPillar", dict] = {
@@ -49,6 +51,11 @@ _DEFAULT_ATTRIBUTES: dict["CarrierPillar", dict] = {
         "occasion": "Pet Memorial",
     },
     CarrierPillar.PENDANT: {
+        "style": "Minimalist",
+        "material": "925 Sterling Silver",
+        "occasion": "Everyday",
+    },
+    CarrierPillar.CHAIN: {
         "style": "Minimalist",
         "material": "925 Sterling Silver",
         "occasion": "Everyday",

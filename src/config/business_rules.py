@@ -122,8 +122,10 @@ NICHE_ZONE_FORBIDDEN_TERMS: frozenset[str] = frozenset({
 })
 
 # ─── Description ──────────────────────────────────────────────────────────────
-DESCRIPTION_MIN_WORDS: int = 150
-DESCRIPTION_MAX_WORDS: int = 220
+# The LLM writes only the short intro paragraph; DescriptionEngine adds the
+# ★★ sections around it, so the generated part is kept deliberately brief.
+DESCRIPTION_INTRO_MIN_WORDS: int = 40
+DESCRIPTION_INTRO_MAX_WORDS: int = 90
 DESCRIPTION_MAX_SIMILARITY: float = 0.85   # cosine similarity vs corpus (sentence-transformers)
 DESCRIPTION_MIN_ORIGINALITY_PCT: int = 96  # ≥ 96% originality
 
@@ -150,6 +152,14 @@ QUANTITY_TEST_MIN: int = 10
 QUANTITY_TEST_MAX: int = 300
 QUANTITY_FORBIDDEN: int = 1  # kills algorithm
 
+# ─── Pricing fallback ─────────────────────────────────────────────────────────
+# Used only when a build has no cost signal at all (no manual override, no Rexven
+# scrape, no supplier_product_cents). Listings are created as Etsy drafts, so a
+# placeholder cost never blocks a build — price gets corrected later, either by
+# hand on Etsy or via reprice_product/reprice_all_preset_products once the real
+# cost is known.
+FALLBACK_COST_CENTS: int = 500  # $5
+
 # ─── Renewal schedule (Turkey time, UTC+3) ────────────────────────────────────
 RENEW_HOURS_TR: list[int] = [17, 21, 2, 5]
 
@@ -161,6 +171,7 @@ CARRIER_PILLARS: list[str] = [
     "birth_flower",
     "pet",
     "pendant",
+    "chain",
 ]
 
 # ─── Variants ─────────────────────────────────────────────────────────────────

@@ -34,6 +34,7 @@ from src.modules.images.jewelry_set import (
     generate_jewelry_set,
 )
 from src.modules.images.preprocessing import preprocess_and_save
+from src.modules.images.static_assets import attach_asset, default_assets_for
 from src.modules.sheets.sync import upsert_product_row
 from src.utils.logger import get_logger
 
@@ -361,6 +362,13 @@ async def _run_jewelry_9_pipeline(
     _persist_chart(jset.size_chart)
     _persist_chart(jset.birthstone_chart)
     _persist_chart(jset.care_instructions_chart)
+
+    # Built-in charts are off by default; attach the finished library images
+    # instead (chain chart / birthstone chart / care card, per product).
+    if not any((jset.size_chart, jset.birthstone_chart, jset.care_instructions_chart)):
+        for name in default_assets_for(product, session):
+            if attach_asset(product, session, settings, name, rank=next_rank):
+                next_rank += 1
 
     # ── Alt text for real images (preserved from legacy behaviour) ────────
     for img in real_images:

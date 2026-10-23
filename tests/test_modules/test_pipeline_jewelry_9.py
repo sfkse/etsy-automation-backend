@@ -102,3 +102,62 @@ async def test_jewelry_9_pipeline_persists_nine_ranked_images(tmp_path):
 
     assert added_rows[0].is_selected is True
     assert all(row.is_selected is False for row in added_rows[1:])
+
+
+@pytest.mark.asyncio
+async def test_without_charts_attaches_default_assets_after_ai_shots(tmp_path):
+    product = MagicMock()
+    product.id = 42
+    product.sku = "TAKI-0042"
+    product.image_workflow_used = "gemini"
+
+    real_image = ProductImage(
+        id=1, product_id=42, file_path=str(tmp_path / "real.png"), rank=1, is_real=True
+    )
+    Image.new("RGB", (800, 800), (255, 255, 255)).save(real_image.file_path)
+    shop = ShopSettings(id=1, image_workflow_mode="jewelry_9")
+
+    session = MagicMock()
+
+    def query_side(model):
+        q = MagicMock()
+        if model is ProductImage:
+            q.filter_by.return_value.order_by.return_value.all.return_value = [real_image]
+            q.filter_by.return_value.filter.return_value.first.return_value = None
+        elif model is ShopSettings:
+            q.filter_by.return_value.first.return_value = shop
+        else:
+            q.filter_by.return_value.first.return_value = None
+        return q
+
+    session.query.side_effect = query_side
+    settings = MagicMock()
+    settings.IMAGES_DIR = str(tmp_path)
+    settings.DEFAULT_IMAGE_WORKFLOW = "gemini"
+
+    fake_set = JewelryImageSet(
+        mannequin_shots=[_ai_result() for _ in range(4)],
+        concept_shots=[_ai_result() for _ in range(3)],
+    )
+    attach = MagicMock(return_value=MagicMock())
+
+    with patch(
+        "src.modules.images.pipeline.preprocess_and_save",
+        return_value=real_image.file_path,
+    ), patch(
+        "src.modules.images.pipeline.generate_jewelry_set",
+        new=AsyncMock(return_value=fake_set),
+    ), patch(
+        "src.modules.images.pipeline.generate_alt_text", return_value="alt"
+    ), patch(
+        "src.modules.images.pipeline.upsert_product_row"
+    ), patch(
+        "src.modules.images.pipeline.auto_crop_cover_photo"
+    ), patch(
+        "src.modules.images.pipeline.default_assets_for",
+        return_value=["chain_chart.png", "care_instructions.png"],
+    ), patch("src.modules.images.pipeline.attach_asset", attach):
+        await run_image_pipeline(product=product, session=session, settings=settings)
+
+    calls = [(c.args[3], c.kwargs["rank"]) for c in attach.call_args_list]
+    assert calls == [("chain_chart.png", 8), ("care_instructions.png", 9)]

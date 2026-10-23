@@ -177,7 +177,7 @@ class ProductImage(Base):
     file_path = Column(String(500))
     rank = Column(Integer)
     is_real = Column(Boolean, default=False)
-    workflow_source = Column(String(20))
+    workflow_source = Column(String(64))  # e.g. "gemini", "chart:birthstone", "asset:<any filename stem>"
     alt_text = Column(String(250))
     is_selected = Column(Boolean, default=False)
 
@@ -655,6 +655,7 @@ class ShopSettings(Base):
             "birth_flower",
             "pet",
             "pendant",
+            "chain",
         ],
     )
 
@@ -678,9 +679,17 @@ class DescriptionTemplate(Base):
     """Per-category description scaffold. Filled with product-specific blanks at gen time."""
 
     __tablename__ = "description_templates"
+    __table_args__ = (
+        UniqueConstraint(
+            "category", "material_type", name="uq_description_templates_category_material"
+        ),
+    )
 
     id = Column(Integer, primary_key=True)
-    category = Column(String(20), nullable=False, unique=True)  # JewelryCategory value
+    category = Column(String(20), nullable=False)  # JewelryCategory value
+    # MaterialType value ("brass" / "silver_925"), or "any" for a template shared
+    # by every material of the category. Not NULL so the unique key holds.
+    material_type = Column(String(20), nullable=False, default="any", server_default="any")
 
     section_intro = Column(Text, nullable=True)
     section_how_to_order = Column(Text, nullable=True)

@@ -9,8 +9,8 @@
 <h2 class="mb-1">Product Images</h2>
 <p class="text-muted mb-4">
   7 AI photos (4 on-model + 3 concept). Regenerate any photo with a chosen backend,
-  or compare all backends side by side and keep the one you like. Other listing
-  images (size/care) are added manually.
+  or compare all backends side by side and keep the one you like. Common images
+  (chain chart, birthstone chart, care card) are listed below — add more from the gallery.
 </p>
 
 <div class="row g-4" id="slot-grid">
@@ -71,7 +71,7 @@
                  style="aspect-ratio:1; object-fit:cover; background:#000;"
                  {% if s.video_url %}src="{{ s.video_url }}"{% endif %}></video>
           <textarea class="form-control form-control-sm video-prompt mb-2" rows="2"
-                    placeholder="Motion / animation prompt">{{ default_motion_prompt }}</textarea>
+                    placeholder="Motion / animation prompt">{{ s.default_motion_prompt }}</textarea>
           <div class="input-group input-group-sm mb-1">
             <select class="form-select video-model" title="Video model">
               {% for m in video_models %}
@@ -91,6 +91,55 @@
     </div>
   </div>
   {% endfor %}
+</div>
+
+<!-- ── Common images (asset library) ─────────────────────────────────────── -->
+<div class="d-flex align-items-center justify-content-between mt-5 mb-2">
+  <div>
+    <h4 class="mb-0">Common images</h4>
+    <div class="small text-muted">Added after the AI photos in the listing, in this order.</div>
+  </div>
+  <button type="button" class="btn btn-outline-primary btn-sm" data-bs-toggle="modal"
+          data-bs-target="#assetGalleryModal">+ Add from gallery</button>
+</div>
+<div class="row g-3" id="asset-grid">
+  {% for a in attached_assets %}
+  <div class="col-6 col-md-3" data-asset-image="{{ a.image_id }}">
+    <div class="card border-0 shadow-sm h-100">
+      <img src="{{ a.url }}" alt="{{ a.label }}" class="card-img-top" style="aspect-ratio:1; object-fit:contain; background:#f8f9fa;">
+      <div class="card-body p-2 d-flex align-items-center justify-content-between">
+        <span class="small fw-semibold">{{ a.label }}</span>
+        <button type="button" class="btn btn-sm btn-outline-danger py-0 btn-asset-remove" title="Remove">×</button>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12 text-muted small asset-empty">No common images yet — add some from the gallery.</div>
+  {% endfor %}
+</div>
+<div class="small text-danger mt-2 d-none" id="asset-error"></div>
+
+<div class="modal fade" id="assetGalleryModal" tabindex="-1" aria-labelledby="assetGalleryTitle" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="assetGalleryTitle">Common images</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-2">Click an image to add it to this product (click again to remove).
+          Hover an image and use × to delete it from the gallery for good.</p>
+        <form id="asset-upload-form" class="input-group input-group-sm mb-3">
+          <input type="file" class="form-control" id="asset-upload-input" accept="image/png,image/jpeg,image/webp" required>
+          <button type="submit" class="btn btn-outline-primary">Upload to gallery</button>
+        </form>
+        <div class="small text-danger mb-2 d-none" id="asset-upload-error"></div>
+        <div class="row g-3" id="asset-library">
+          <div class="col-12 text-muted small">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -363,5 +412,201 @@ document.querySelectorAll(".btn-generate-video").forEach(btn => {
 // before navigating away); pollStatus() keeps polling only while work is running.
 pollStatus();
 pollVideoStatus();
+</script>
+
+<script>
+// ── Common images: gallery modal + attached grid ─────────────────────────────
+(function () {
+  const grid = document.getElementById("asset-grid");
+  const library = document.getElementById("asset-library");
+  const errorEl = document.getElementById("asset-error");
+  let attached = [];   // [{image_id, stem, label, url}]
+
+  function showError(msg) {
+    errorEl.textContent = msg || "";
+    errorEl.classList.toggle("d-none", !msg);
+  }
+
+  const stemOf = name => name.replace(/\.[^.]+$/, "");
+
+  function renderAttached() {
+    grid.innerHTML = "";
+    if (!attached.length) {
+      grid.innerHTML = '<div class="col-12 text-muted small asset-empty">No common images yet — add some from the gallery.</div>';
+      return;
+    }
+    for (const a of attached) {
+      const col = document.createElement("div");
+      col.className = "col-6 col-md-3";
+      col.dataset.assetImage = a.image_id;
+      col.innerHTML = `
+        <div class="card border-0 shadow-sm h-100">
+          <img src="${a.url}" alt="" class="card-img-top" style="aspect-ratio:1; object-fit:contain; background:#f8f9fa;">
+          <div class="card-body p-2 d-flex align-items-center justify-content-between">
+            <span class="small fw-semibold"></span>
+            <button type="button" class="btn btn-sm btn-outline-danger py-0 btn-asset-remove" title="Remove">×</button>
+          </div>
+        </div>`;
+      col.querySelector("span").textContent = a.label;
+      col.querySelector("img").alt = a.label;
+      grid.appendChild(col);
+    }
+  }
+
+  function renderLibrary(items) {
+    library.innerHTML = "";
+    if (!items.length) {
+      library.innerHTML = '<div class="col-12 text-muted small">The gallery is empty — upload an image above to add one.</div>';
+      return;
+    }
+    const byStem = Object.fromEntries(attached.map(a => [a.stem, a]));
+    for (const item of items) {
+      const added = byStem[stemOf(item.name)];
+      const col = document.createElement("div");
+      col.className = "col-6 col-md-4 position-relative asset-library-item";
+      col.innerHTML = `
+        <button type="button" class="btn btn-sm btn-outline-danger py-0 px-1 position-absolute btn-library-remove"
+                style="top:4px; right:4px; z-index:1; line-height:1.4;" title="Delete from gallery">×</button>
+        <button type="button" class="card w-100 p-0 text-start asset-pick ${added ? "border-success border-2" : ""}">
+          <img src="${item.url}" alt="" class="card-img-top" loading="lazy" style="aspect-ratio:1; object-fit:contain; background:#f8f9fa;">
+          <div class="card-body p-2 d-flex align-items-center justify-content-between w-100">
+            <span class="small fw-semibold"></span>
+            <span class="badge ${added ? "bg-success" : "bg-light text-dark"}">${added ? "✓ Added" : "Add"}</span>
+          </div>
+        </button>`;
+      col.querySelector(".card-body span").textContent = item.label;
+      col.querySelector("img").alt = item.label;
+      col.querySelector(".asset-pick").addEventListener("click", ev => toggle(item, ev.currentTarget));
+      col.querySelector(".btn-library-remove").addEventListener("click", ev => {
+        ev.stopPropagation();
+        removeFromLibrary(item, ev.currentTarget);
+      });
+      library.appendChild(col);
+    }
+  }
+
+  let libraryItems = [];
+
+  async function load() {
+    try {
+      const res = await fetch(`/products/${SKU}/assets`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      attached = data.attached || [];
+      libraryItems = data.library || [];
+      renderAttached();
+      renderLibrary(libraryItems);
+    } catch (e) {
+      library.innerHTML = `<div class="col-12 text-danger small">Could not load the gallery: ${e.message}</div>`;
+    }
+  }
+
+  async function detach(imageId) {
+    const res = await fetch(`/products/${SKU}/assets/${imageId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    attached = data.attached || [];
+  }
+
+  async function toggle(item, btn) {
+    showError("");
+    btn.disabled = true;
+    const badge = btn.querySelector(".badge");
+    badge.textContent = "…";
+    try {
+      const added = attached.find(a => a.stem === stemOf(item.name));
+      if (added) {
+        await detach(added.image_id);
+      } else {
+        const data = await postForm(`/products/${SKU}/assets`, { name: item.name });
+        if (data.error) throw new Error(data.error);
+        attached = data.attached || [];
+      }
+    } catch (e) {
+      showError("Could not update common images: " + e.message);
+    }
+    renderAttached();
+    renderLibrary(libraryItems);
+  }
+
+  grid.addEventListener("click", async ev => {
+    const btn = ev.target.closest(".btn-asset-remove");
+    if (!btn) return;
+    const col = btn.closest("[data-asset-image]");
+    btn.disabled = true;
+    showError("");
+    try {
+      await detach(col.dataset.assetImage);
+      renderAttached();
+      renderLibrary(libraryItems);
+    } catch (e) {
+      btn.disabled = false;
+      showError("Could not remove image: " + e.message);
+    }
+  });
+
+  // ── Upload to / delete from the shared gallery ──────────────────────────────
+  const uploadForm = document.getElementById("asset-upload-form");
+  const uploadInput = document.getElementById("asset-upload-input");
+  const uploadError = document.getElementById("asset-upload-error");
+
+  function showUploadError(msg) {
+    uploadError.textContent = msg || "";
+    uploadError.classList.toggle("d-none", !msg);
+  }
+
+  uploadForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const file = uploadInput.files[0];
+    if (!file) return;
+    showUploadError("");
+    const btn = uploadForm.querySelector("button");
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Uploading…";
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/products/${SKU}/assets/library`, { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      libraryItems = data.library || [];
+      attached = data.attached || [];
+      renderAttached();
+      renderLibrary(libraryItems);
+      uploadForm.reset();
+    } catch (e) {
+      showUploadError("Could not upload: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+
+  async function removeFromLibrary(item, btn) {
+    showUploadError("");
+    btn.disabled = true;
+    const label = item.label || item.name;
+    if (!confirm(`Delete "${label}" from the gallery? Products that already have it attached keep their own copy.`)) {
+      btn.disabled = false;
+      return;
+    }
+    try {
+      const res = await fetch(`/products/${SKU}/assets/library/${encodeURIComponent(item.name)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+      libraryItems = data.library || [];
+      attached = data.attached || [];
+      renderAttached();
+      renderLibrary(libraryItems);
+    } catch (e) {
+      btn.disabled = false;
+      showUploadError("Could not delete from gallery: " + e.message);
+    }
+  }
+
+  document.getElementById("assetGalleryModal").addEventListener("show.bs.modal", load);
+  load();
+})();
 </script>
 {% endblock %}

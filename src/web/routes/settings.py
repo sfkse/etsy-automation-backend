@@ -198,15 +198,30 @@ _DESC_TEMPLATE_FIELDS = {
 
 @router.get("/description-templates")
 def list_description_templates(session: Session = Depends(get_session)):
-    rows = session.query(DescriptionTemplate).all()
+    rows = (
+        session.query(DescriptionTemplate)
+        .order_by(DescriptionTemplate.category, DescriptionTemplate.material_type)
+        .all()
+    )
     return [_row_to_dict(r) for r in rows]
 
 
 @router.get("/description-templates/{category}")
-def get_description_template(category: str, session: Session = Depends(get_session)):
-    row = session.query(DescriptionTemplate).filter_by(category=category).first()
+def get_description_template(
+    category: str,
+    material_type: str = "any",
+    session: Session = Depends(get_session),
+):
+    row = (
+        session.query(DescriptionTemplate)
+        .filter_by(category=category, material_type=material_type)
+        .first()
+    )
     if row is None:
-        raise HTTPException(status_code=404, detail=f"template for {category!r} not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"template for {category!r} / {material_type!r} not found",
+        )
     return _row_to_dict(row)
 
 
@@ -214,11 +229,22 @@ def get_description_template(category: str, session: Session = Depends(get_sessi
 def save_description_template(
     category: str,
     payload: dict,
+    material_type: str | None = None,
     session: Session = Depends(get_session),
 ):
-    row = session.query(DescriptionTemplate).filter_by(category=category).first()
+    """Upsert the (category, material_type) template.
+
+    ``material_type`` comes from the query string or the form body (the
+    Settings forms send it as a field); it defaults to the shared ``"any"`` row.
+    """
+    material_type = material_type or payload.get("material_type") or "any"
+    row = (
+        session.query(DescriptionTemplate)
+        .filter_by(category=category, material_type=material_type)
+        .first()
+    )
     if row is None:
-        row = DescriptionTemplate(category=category)
+        row = DescriptionTemplate(category=category, material_type=material_type)
         session.add(row)
     _apply_updates(row, payload, _DESC_TEMPLATE_FIELDS)
     session.commit()
@@ -517,7 +543,10 @@ def _load_all_tabs(session: Session) -> dict:
     return {
         "production_partner": {k: getattr(settings_row, k) for k in partner_fields},
         "description_templates": [
-            _row_to_dict(r) for r in session.query(DescriptionTemplate).all()
+            _row_to_dict(r)
+            for r in session.query(DescriptionTemplate)
+            .order_by(DescriptionTemplate.category, DescriptionTemplate.material_type)
+            .all()
         ],
         "default_attributes": [
             _row_to_dict(r) for r in session.query(DefaultAttributes).all()

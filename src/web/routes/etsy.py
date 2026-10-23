@@ -56,6 +56,7 @@ def _get_etsy_client() -> EtsyClient:
             token_manager=_get_token_manager(),
             shop_id=_settings.ETSY_SHOP_ID,
             api_key=_settings.ETSY_API_KEY,
+            shared_secret=_settings.ETSY_SHARED_SECRET,
         )
     return _etsy_client
 

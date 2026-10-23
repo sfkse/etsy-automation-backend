@@ -138,3 +138,49 @@ def test_operations_round_trip_saves_via_json(client):
     assert body["renewal_option"] == "manual"
     assert body["default_quantity"] == 111
     assert body["feature_listing_default"] is True
+
+
+def _client_with_description_templates(rows: list) -> tuple[TestClient, MagicMock]:
+    session = _make_session()
+    base_side = session.query.side_effect
+
+    def query_side(model):
+        q = base_side(model)
+        if model is DescriptionTemplate:
+            q.order_by.return_value.all.return_value = rows
+            q.filter_by.return_value.first.return_value = None
+        return q
+
+    session.query.side_effect = query_side
+    app = FastAPI()
+    settings_routes.set_templates(Jinja2Templates(directory="src/web/templates"))
+    app.include_router(settings_routes.router)
+    app.dependency_overrides[get_session] = lambda: session
+    return TestClient(app), session
+
+
+def test_description_templates_render_one_accordion_per_material():
+    rows = [
+        DescriptionTemplate(id=1, category="necklace", material_type="brass"),
+        DescriptionTemplate(id=2, category="necklace", material_type="silver_925"),
+        DescriptionTemplate(id=3, category="ring", material_type="any"),
+    ]
+    client, _ = _client_with_description_templates(rows)
+    html = client.get("/settings").text
+    assert "necklace · brass" in html
+    assert "necklace · silver" in html
+    assert 'name="material_type" value="silver_925"' in html
+    assert "ring · " not in html
+    assert "Brass overrides" not in html
+
+
+def test_save_description_template_creates_row_for_material():
+    client, session = _client_with_description_templates([])
+    resp = client.post(
+        "/settings/description-templates/necklace",
+        json={"material_type": "silver_925", "section_materials": "• 925 Silver"},
+    )
+    assert resp.status_code == 200
+    added = session.add.call_args.args[0]
+    assert (added.category, added.material_type) == ("necklace", "silver_925")
+    assert added.section_materials == "• 925 Silver"

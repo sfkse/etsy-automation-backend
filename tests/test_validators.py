@@ -388,7 +388,7 @@ class TestBusinessRuleConstants:
         assert br.TAG_MAX_LENGTH == 20
 
     def test_carrier_pillars_count(self) -> None:
-        assert len(br.CARRIER_PILLARS) == 6
+        assert len(br.CARRIER_PILLARS) == 7
 
     def test_variant_count(self) -> None:
         assert br.VARIANT_COUNT == 3
@@ -426,29 +426,16 @@ def _make_description(word_count: int, include_cliche: str = "") -> str:
 
 
 class TestDescriptionValidator:
-    def test_exact_min_words_passes(self) -> None:
-        desc = _make_description(150)
-        valid, violations = validate_description(desc)
+    def test_short_description_passes(self) -> None:
+        valid, violations = validate_description(_make_description(30))
         assert valid
         assert violations == []
 
-    def test_exact_max_words_passes(self) -> None:
-        desc = _make_description(220)
-        valid, violations = validate_description(desc)
+    def test_long_scaffolded_description_passes(self) -> None:
+        # Full descriptions (intro + ★★ sections) run ~450 words — no length rule.
+        valid, violations = validate_description(_make_description(455))
         assert valid
-        assert violations == []
-
-    def test_below_min_words_fails(self) -> None:
-        desc = _make_description(149)
-        valid, violations = validate_description(desc)
-        assert not valid
-        assert any("149" in v for v in violations)
-
-    def test_above_max_words_fails(self) -> None:
-        desc = _make_description(221)
-        valid, violations = validate_description(desc)
-        assert not valid
-        assert any("221" in v for v in violations)
+        assert not any("Word count" in v for v in violations)
 
     def test_cliche_phrase_in_description_fails(self) -> None:
         desc = _make_description(155, include_cliche="Elevate your style")
@@ -456,25 +443,12 @@ class TestDescriptionValidator:
         assert not valid
         assert any("Elevate your style" in v for v in violations)
 
-    def test_no_cliche_clean_description_passes(self) -> None:
-        desc = _make_description(180)
-        valid, violations = validate_description(desc)
-        assert valid
-        assert violations == []
-
     def test_multiple_cliches_all_reported(self) -> None:
         desc = "Elevate your style with this ring. Treat yourself today. " + " ".join(["word"] * 148)
         valid, violations = validate_description(desc)
         assert not valid
         assert any("Elevate your style" in v for v in violations)
         assert any("Treat yourself" in v for v in violations)
-
-    def test_word_count_and_cliche_both_violations(self) -> None:
-        # Too short AND has a cliché
-        desc = "Elevate your style with this ring."
-        valid, violations = validate_description(desc)
-        assert not valid
-        assert len(violations) >= 2
 
 
 # ─── Title Additional Rules ────────────────────────────────────────────────────
@@ -752,12 +726,17 @@ class TestValidateField:
         assert ok
         assert violations == []
 
-    def test_validate_field_description_word_count_fail(self) -> None:
+    def test_validate_field_description_has_no_word_count_rule(self) -> None:
         from src.modules.approval.service import validate_field
-        desc = "too short"
-        ok, violations = validate_field("description", desc)
+        ok, violations = validate_field("description", " ".join(["word"] * 455))
+        assert ok
+        assert violations == []
+
+    def test_validate_field_description_cliche_fail(self) -> None:
+        from src.modules.approval.service import validate_field
+        ok, violations = validate_field("description", "Elevate your style today.")
         assert not ok
-        assert any("Word count" in v for v in violations)
+        assert any("Elevate your style" in v for v in violations)
 
     def test_validate_field_unknown_field_passes(self) -> None:
         from src.modules.approval.service import validate_field

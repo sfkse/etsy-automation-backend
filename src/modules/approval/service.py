@@ -27,6 +27,7 @@ from src.db.models import (
     VariationRow,
 )
 from src.domain.validators import (
+    validate_description,
     validate_material_coherence,
     validate_tags,
     validate_title,
@@ -415,15 +416,5 @@ def validate_field(
             violations = violations + mat_violations
         return (ok, violations)
     if field == "description":
-        word_count = len(value.split())
-        from src.config.business_rules import DESCRIPTION_MAX_WORDS, DESCRIPTION_MIN_WORDS, CLICHE_DESCRIPTION_PHRASES
-        violations = []
-        if not (DESCRIPTION_MIN_WORDS <= word_count <= DESCRIPTION_MAX_WORDS):
-            violations.append(
-                f"Word count {word_count} not in [{DESCRIPTION_MIN_WORDS}, {DESCRIPTION_MAX_WORDS}]"
-            )
-        for phrase in CLICHE_DESCRIPTION_PHRASES:
-            if phrase.lower() in value.lower():
-                violations.append(f"Cliché phrase found: '{phrase}'")
-        return (len(violations) == 0, violations)
+        return validate_description(value)
     return (True, [])

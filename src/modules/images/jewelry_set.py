@@ -238,12 +238,25 @@ def build_mannequin_prompts(p: Palette) -> list[str]:
         f"blurred {p.background}, natural skin texture, shot on 85mm lens, gentle film grain, "
         f"{DAINTY_SCALE}, {CLOSE_FRAMING}, "
         f"head turned so the face is NOT visible, cropped above the jaw",
-        # M3 — straight-on frontal extreme macro of the pendant in the hollow of the throat
+        # M3 — straight-on frontal extreme macro of the pendant in the hollow of the throat.
+        # The shot used to ask for "the chain falling softly out of focus" with no
+        # qualifier — the model blurred the chain starting right at the pendant,
+        # which is also where the bail/loop connecting chain to pendant lives, so
+        # that structural detail kept coming out merged or missing. The shallow
+        # depth of field now explicitly starts further down the chain, past the
+        # pendant and its attachment point, which stay fully sharp.
+        # Naming the bail's exact shape here (tried: "small round open jump-ring")
+        # was tried and overcorrected — the model enlarged the ring instead of just
+        # fixing its shape, and bail shape actually varies per product (not every
+        # pendant has a round jump-ring), so hardcoding one shape into the shared
+        # prompt is wrong in general. Leave this generic and fix per-product bail
+        # mismatches via the slot's "Extra instructions" field at regen time instead.
         f"Straight-on frontal extreme macro of the pendant resting in the hollow of the "
-        f"throat against bare skin, no hands, ultra-shallow depth of field with the chain "
-        f"falling softly out of focus, {p.lighting} raking across the skin to reveal fine "
-        f"natural texture and the metal's finish, blurred {p.background}, editorial jewelry "
-        f"detail, shot on 100mm macro lens, "
+        f"throat against bare skin, no hands, the pendant and the loop or bail where the "
+        f"chain attaches to it tack-sharp and fully detailed, the depth of field only "
+        f"falling off further down the chain toward the shoulders, {p.lighting} raking "
+        f"across the skin to reveal fine natural texture and the metal's finish, blurred "
+        f"{p.background}, editorial jewelry detail, shot on 100mm macro lens, "
         f"the pendant small enough to nestle inside the hollow of the throat, "
         f"{DAINTY_SCALE}, {CLOSE_FRAMING}, "
         f"face and eyes NOT visible, only the throat and upper chest in frame",
@@ -265,15 +278,31 @@ def build_mannequin_prompts(p: Palette) -> list[str]:
 
 def build_concept_prompts(p: Palette) -> list[str]:
     return [
-        # C1 — overhead flat lay, chain coiled to sit inside a SQUARE frame.
+        # C1 — overhead flat lay, chain gathered to sit inside a SQUARE frame.
         # "Wide"/"edge to edge" phrasing here previously read as a landscape
         # scene and the model answered with 16:9; the ratio is pinned on the
         # request now, so the wording must describe a square composition too.
-        f"The necklace laid flat on {p.surface} in a square composition, the "
-        f"chain curling in a loose natural coil so the whole piece sits well "
-        f"inside a square frame, shot from directly overhead, {p.lighting}, the "
-        f"pendant and chain reading clearly against the empty surface around "
-        f"them, {CONCEPT_SIMPLICITY}, {DAINTY_SCALE_STILL_LIFE}",
+        # Two earlier wordings both failed by describing the chain's path in
+        # the abstract and leaving something uncovered for the model to
+        # invent: "coil"/"curling" drew a nautilus spiral; "the rest of the
+        # chain trailing off to one side" drew a second, disconnected-looking
+        # strand that faded off-frame with no clasp or resolution — read as
+        # extra, unexplained chain either way. Naming a complete, closed,
+        # recognizable shape (teardrop) instead leaves nothing loose to
+        # misinterpret: the whole chain is accounted for as one continuous
+        # loop, clasp included, nothing trailing off anywhere.
+        f"The necklace laid flat on {p.surface} in a square composition, "
+        f"draped into a simple teardrop shape as if held up by the clasp and "
+        f"settling under its own weight, the chain forming ONE continuous "
+        f"loop from the clasp down to the pendant at the bottom and back up "
+        f"to the clasp — the entire chain accounted for in that one loop, "
+        f"nothing trailing off to the side, no loose ends, no second strand, "
+        f"never a tight or symmetrical spiral, the camera moved in closer than "
+        f"a standard flat lay so the teardrop fills most of the square frame "
+        f"with only a thin margin of surface at the edges — shot from "
+        f"directly overhead, {p.lighting}, "
+        f"the pendant and chain reading clearly against the empty surface "
+        f"around them, {CONCEPT_SIMPLICITY}, {DAINTY_SCALE_STILL_LIFE}",
         # C2 — stone slab + a single fabric drape (the reference-photo look)
         f"The necklace resting on the edge of {p.surface}, a single length of "
         f"{p.textile} draped softly behind and to one side of it, {p.lighting} "
@@ -315,7 +344,10 @@ def build_style_hint(p: Palette, still_life: bool = False) -> str:
         f"minimalist delicate everyday jewelry, understated rather than "
         f"statement or bold, {scale}. "
         f"Match the reference photo's proportions exactly — neither bulked up into a "
-        f"chunkier piece nor thinned out until it barely registers."
+        f"chunkier piece nor thinned out until it barely registers. Reproduce the "
+        f"pendant's exact shape and structure from the reference photo as well — "
+        f"every cutout, line, and the loop or bail the chain passes through must "
+        f"match precisely; never simplify, merge, or omit any part of the design."
     )
 
 

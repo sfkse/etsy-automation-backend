@@ -39,6 +39,7 @@ from src.db.models import (
     VariationPreset,
     VariationRow,
 )
+from src.config.business_rules import FALLBACK_COST_CENTS
 from src.db.session import SessionLocal
 from src.modules.input import generate_sku
 from src.modules.listings.description_engine import DescriptionEngine
@@ -59,6 +60,7 @@ _PILLAR_TO_SECTION_NAME: dict[str, str] = {
     "birth_flower": "Birth Flower Necklace",
     "pet": "Pet Memorial Jewelry",
     "pendant": "Pendant Necklace",
+    "chain": "Chain Necklace",
 }
 
 
@@ -206,9 +208,18 @@ class ListingBuilder:
             or 0
         )
         if not base_cost_cents:
-            raise ValueError(
-                "cost_cents_override required when Rexven scrape yields no cost"
+            # No manual override, no Rexven scrape, no supplier_product_cents — the
+            # extension no longer requires price/cost entry, so fall back instead of
+            # blocking the build. The listing is created as an Etsy draft either way,
+            # so this placeholder cost gets corrected later (by hand on Etsy, or via
+            # reprice_product once a real cost is known) rather than up front.
+            _log.warning(
+                "cost_unavailable_using_fallback",
+                rexven_sku=req.rexven_sku,
+                target_keyword=req.target_keyword,
+                fallback_cost_cents=FALLBACK_COST_CENTS,
             )
+            base_cost_cents = FALLBACK_COST_CENTS
         # Landed cost = product + shipping. When the extension supplies shipping
         # and use_landed_cost is on (default), pricing formulas see the fully
         # landed number so margins reflect reality.
@@ -591,6 +602,7 @@ async def run_listing_content_pipeline(
                     preset=preset,
                     personalization=personalization,
                     category=category,
+                    title=variant.title,
                 )
 
         product.generated_variants = [v.to_dict() for v in bundle.variants]

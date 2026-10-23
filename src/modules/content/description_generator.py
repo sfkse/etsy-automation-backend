@@ -7,9 +7,15 @@ checks fail. Returns the last draft with logged warnings on total failure.
 """
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 
-from src.config.business_rules import CLICHE_DESCRIPTION_PHRASES, DESCRIPTION_MIN_WORDS, DESCRIPTION_MAX_WORDS
+from src.config.business_rules import (
+    CLICHE_DESCRIPTION_PHRASES,
+    DESCRIPTION_INTRO_MAX_WORDS,
+    DESCRIPTION_INTRO_MIN_WORDS,
+)
 from src.config.prompts import (
     DESCRIPTION_DYNAMIC_TEMPLATE,
     DESCRIPTION_RETRY_PROMPT,
@@ -56,7 +62,7 @@ def _word_count(text: str) -> int:
 
 def _check_word_count(description: str) -> tuple[bool, int]:
     count = _word_count(description)
-    return (DESCRIPTION_MIN_WORDS <= count <= DESCRIPTION_MAX_WORDS), count
+    return (DESCRIPTION_INTRO_MIN_WORDS <= count <= DESCRIPTION_INTRO_MAX_WORDS), count
 
 
 class DescriptionGenerator:
@@ -104,7 +110,7 @@ class DescriptionGenerator:
         draft = ""
         for attempt in range(1, _MAX_ATTEMPTS + 1):
             response = await self.llm.complete(
-                prompt=prompt, cached_prefix=DESCRIPTION_STATIC_PREFIX, max_tokens=700
+                prompt=prompt, cached_prefix=DESCRIPTION_STATIC_PREFIX, max_tokens=300
             )
             draft = self._parse_description(response)
 
@@ -115,7 +121,7 @@ class DescriptionGenerator:
                     attempt=attempt,
                     angle=angle.label,
                     word_count=word_count,
-                    expected=f"{DESCRIPTION_MIN_WORDS}-{DESCRIPTION_MAX_WORDS}",
+                    expected=f"{DESCRIPTION_INTRO_MIN_WORDS}-{DESCRIPTION_INTRO_MAX_WORDS}",
                 )
                 prompt = self._add_length_reminder(prompt, word_count)
                 continue
@@ -131,7 +137,11 @@ class DescriptionGenerator:
                 prompt = self._add_cliche_reminder(prompt, found_cliches)
                 continue
 
-            is_original, similarity = self.originality.check(draft)
+            # Embedding work is CPU-bound and synchronous — run it off the event
+            # loop so a regeneration doesn't block every other request.
+            is_original, similarity = await asyncio.to_thread(
+                self.originality.check, draft
+            )
             if not is_original:
                 _log.warning(
                     "description_not_original",
@@ -153,7 +163,7 @@ class DescriptionGenerator:
                         similarity=f"{similarity:.2f}",
                     )
                 if catastrophic or attempt >= _MAX_ATTEMPTS - 1:
-                    prompt = self._build_retry_prompt(
+                    prompt = await self._build_retry_prompt(
                         product=product,
                         angle=angle,
                         paired_title=paired_title,
@@ -185,7 +195,7 @@ class DescriptionGenerator:
     def _parse_description(response: str) -> str:
         return response.strip()
 
-    def _build_retry_prompt(
+    async def _build_retry_prompt(
         self,
         product: Product,
         angle: VariantAngle,
@@ -202,7 +212,9 @@ class DescriptionGenerator:
         carried by the dynamic template, which this replaces) is re-appended so
         the aggressive path doesn't silently re-introduce clichés.
         """
-        similar = self.originality.find_similar_phrases(rejected_draft, top_k=5)
+        similar = await asyncio.to_thread(
+            self.originality.find_similar_phrases, rejected_draft, top_k=5
+        )
         prompt = DESCRIPTION_RETRY_PROMPT.format(
             similarity=similarity,
             rejected_draft=rejected_draft,
@@ -222,7 +234,7 @@ class DescriptionGenerator:
     def _add_length_reminder(prompt: str, actual_count: int) -> str:
         return prompt + (
             f"\n\nCRITICAL: Previous attempt was {actual_count} words. "
-            f"Target is {DESCRIPTION_MIN_WORDS}-{DESCRIPTION_MAX_WORDS} words. "
+            f"Target is {DESCRIPTION_INTRO_MIN_WORDS}-{DESCRIPTION_INTRO_MAX_WORDS} words. "
             "Count words carefully before submitting."
         )
 

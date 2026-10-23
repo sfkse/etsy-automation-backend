@@ -27,6 +27,7 @@ from src.db.models import (
     ShopSettings,
     VariationPreset,
 )
+from src.modules.listings.description_engine import spaced_header
 
 _log = structlog.get_logger(__name__)
 
@@ -73,53 +74,64 @@ def seed_pricing_strategy(session: Session) -> None:
     session.commit()
 
 
-# ── DescriptionTemplate — one row per JewelryCategory ─────────────────────────
+# ── DescriptionTemplate — one row per (category, material) ────────────────────
+#
+# Shop house style: title line, one short LLM intro paragraph, then
+# "★★ S P A C E D ★★" headers with • bullets. Placeholders are filled by
+# DescriptionEngine.fill (see its context dict for the full list). Necklaces get
+# a brass and a silver_925 template; DescriptionEngine picks by the preset's
+# material_type and falls back to the category's "any" row.
 
+_H = spaced_header
+
+_ANY = "any"
 
 _NECKLACE_TEMPLATE = {
-    "section_intro": (
-        "{product_name} — a dainty piece designed to be worn every day. "
-        "Whether you wear it solo or layered, this necklace adds a "
-        "personal touch to any look."
-    ),
+    "section_intro": "{product_name}",
     "section_how_to_order": (
-        "**How to Order**\n"
-        "1. Choose your preferred finish — Gold, Silver, or Rose Gold.\n"
-        "2. Select your chain length: {length_options}.\n"
-        "{personalization_instructions}"
+        f"{_H('How to Order')}\n\n"
+        "• Choose the color: {finish_options}\n"
+        "• Choose necklace length: {length_summary}\n"
+        "{personalization_instructions}\n\n"
+        "• Please let us know if you need help with your order."
     ),
-    "section_materials": ("**Materials**\n" "{materials_line}\n" "{chain_note}"),
+    "section_materials": f"{_H('Material')}\n\n" "• {materials_line}",
     "section_finish": (
-        "**Finish**\n"
-        "Available in three finishes to suit your style:\n"
-        "• Gold — 14K gold plating over 925 sterling silver (or premium brass)\n"
-        "• Silver — polished 925 sterling silver\n"
-        "• Rose Gold — 14K rose gold plating, warm and romantic\n"
-        "Each finish resists tarnish under normal wear."
+        f"{_H('Finish')}\n\n"
+        "{finish_bullets}\n\n"
+        f"{_H('Chain Length')}\n\n"
+        "{length_bullets}\n\n"
+        "This necklace beautifully catches the light and leaves a gleaming "
+        "impression! Energetic, unique, and wonderfully dynamic — like you, it "
+        "is full of personality. It makes a glorious gift or a personal treat "
+        "for yourself. :)"
     ),
     "section_packaging": (
-        "**Packaging & Shipping**\n"
-        "Every order ships in a branded gift box, ready to give. "
-        "Standard processing time is 3-5 business days."
+        f"{_H('Package')}\n\n"
+        "• Comes with a stylish gift box\n"
+        "• Ready to ship in 3-5 business days"
     ),
     "section_gift_note": (
-        "**Gift Note**\n"
-        "Want to add a personal message? Include a gift note at checkout "
-        "and we'll print it on a small card included with your order — at no extra cost."
+        f"{_H('Gift Note')}\n\n"
+        "• If you want to include a short gift note, we will be happy to add a "
+        "handwritten note to your order. Please let us know your message at "
+        "checkout."
     ),
     "section_best_gifts_for": (
-        "**Best Gifts For**\n"
-        "This piece is a heartfelt gift for {recipients_list} — mothers, wives, "
-        "daughters, sisters, girlfriends, grandmothers, best friends, or anyone "
-        "you care about. Perfect for {occasions_list}, or as a 'thinking of you' "
-        "surprise. Also a meaningful choice for graduations, engagements, weddings, "
-        "anniversaries, Mother's Day, Valentine's Day, Christmas, birthdays, or "
-        "memorial keepsakes."
+        f"{_H('Best Gift')}\n\n"
+        "• This necklace can be a special gift for your {gift_recipients}. "
+        "Each piece is packaged in a beautiful gift box, suitable for "
+        "{gift_occasions}."
     ),
     "section_have_a_question": (
-        "**Have a Question?**\n"
-        "Message us anytime — we usually reply within a few hours. "
-        "We love working with you on a custom piece, too."
+        f"{_H('Have a Question?')}\n\n"
+        "• Feel free to message us with any question you may have, or any "
+        "problem you may face during or after your order.\n\n"
+        "• Each order is made to your specifications, so please make sure to "
+        "select the right options before checkout, as we do not offer a free "
+        "replacement.\n\n"
+        "Thank you for choosing our {product_name}! We are confident you will "
+        "love the style, comfort, and quality of our handmade jewelry."
     ),
     "brass_overrides": {
         "materials_line": "Premium Brass with 14K Gold/Silver/Rose Gold Plating"
@@ -127,51 +139,106 @@ _NECKLACE_TEMPLATE = {
     "silver_overrides": {
         "materials_line": "925 Sterling Silver with optional Gold/Rose Gold Plating"
     },
-    "default_chain_text": (
-        "The chain is the standard 16 inch length with a 2 inch extender, "
-        "so you can wear it at 16 or 18 inches."
+    "default_chain_text": "16 inches with a 2 inch extender",
+}
+
+# Brass necklaces: one fixed chain, no length choice.
+_NECKLACE_BRASS = {
+    "section_how_to_order": (
+        f"{_H('How to Order')}\n\n"
+        "• Choose the color: {finish_options}\n"
+        "• Chain length: {length_summary}\n"
+        "{personalization_instructions}\n\n"
+        "• Please let us know if you need help with your order."
     ),
+    "section_materials": (
+        f"{_H('Material')}\n\n" "• Premium Brass with 14K Gold / Silver Plating"
+    ),
+    "default_chain_text": "16 inches with a 2 inch extender",
+}
+
+# Silver necklaces: lengths come from the preset ({length_summary}/{length_bullets}).
+_NECKLACE_SILVER = {
+    "section_materials": f"{_H('Material')}\n\n" "• 925 Sterling Silver",
+    "default_chain_text": "",
 }
 
 
-def _tpl(category: JewelryCategory, product_word: str, **overrides) -> dict:
+def _tpl(
+    category: JewelryCategory, product_word: str, material: str = _ANY, **overrides
+) -> dict:
     """Build a template dict per category, defaulting to the necklace scaffold."""
     tpl = dict(_NECKLACE_TEMPLATE)
-    tpl["section_intro"] = tpl["section_intro"].replace("necklace", product_word)
-    tpl["section_best_gifts_for"] = tpl["section_best_gifts_for"].replace(
-        "necklace", product_word
-    )
+    for key in ("section_how_to_order", "section_finish", "section_best_gifts_for"):
+        tpl[key] = tpl[key].replace("necklace", product_word)
     tpl.update(overrides)
     tpl["category"] = category.value
+    tpl["material_type"] = material
     return tpl
+
+
+# Signatures of earlier defaults ("**How to Order**" markdown headers, the
+# "dainty piece" intro, sentence-form chain text, and the material-agnostic
+# house-style sections that predate the brass/silver split). Rows still holding
+# these are upgraded in place; anything else is a user edit and kept.
+_LEGACY_MARKERS = (
+    "**",
+    "a dainty piece designed to be worn every day",
+    "The chain is the standard 16 inch",
+    "The bracelet is 7 inch with",
+)
+_LEGACY_EXACT = {
+    _NECKLACE_TEMPLATE["section_how_to_order"],
+    _NECKLACE_TEMPLATE["section_materials"],
+}
+_UPGRADABLE_FIELDS = (
+    "section_intro",
+    "section_how_to_order",
+    "section_materials",
+    "section_finish",
+    "section_packaging",
+    "section_gift_note",
+    "section_best_gifts_for",
+    "section_have_a_question",
+    "default_chain_text",
+)
+
+
+def _is_legacy(value: str | None) -> bool:
+    return (
+        not value
+        or value in _LEGACY_EXACT
+        or any(marker in value for marker in _LEGACY_MARKERS)
+    )
 
 
 def seed_description_templates(session: Session) -> None:
     seed_specs = [
-        _tpl(JewelryCategory.NECKLACE, "necklace"),
         _tpl(
-            JewelryCategory.BRACELET,
-            "bracelet",
-            default_chain_text="The bracelet is 7 inch with a 1 inch extender.",
+            JewelryCategory.NECKLACE, "necklace", MaterialType.BRASS.value,
+            **_NECKLACE_BRASS,
         ),
         _tpl(
-            JewelryCategory.EARRING,
-            "pair of earrings",
-            section_how_to_order=(
-                "**How to Order**\n"
-                "1. Choose your preferred finish — Gold or Silver.\n"
-                "{personalization_instructions}"
-            ),
-            default_chain_text="",
+            JewelryCategory.NECKLACE, "necklace", MaterialType.SILVER_925.value,
+            **_NECKLACE_SILVER,
         ),
         _tpl(
             JewelryCategory.RING,
             "ring",
             section_how_to_order=(
-                "**How to Order**\n"
-                "1. Choose your preferred finish — Gold, Silver, or Rose Gold.\n"
-                "2. Select your ring size.\n"
-                "{personalization_instructions}"
+                f"{_H('How to Order')}\n\n"
+                "• Choose the color: {finish_options}\n"
+                "• Choose your ring size\n"
+                "{personalization_instructions}\n\n"
+                "• Please let us know if you need help with your order."
+            ),
+            section_finish=(
+                f"{_H('Finish')}\n\n"
+                "{finish_bullets}\n\n"
+                "This ring beautifully catches the light and leaves a gleaming "
+                "impression! Energetic, unique, and wonderfully dynamic — like "
+                "you, it is full of personality. It makes a glorious gift or a "
+                "personal treat for yourself. :)"
             ),
             default_chain_text="",
         ),
@@ -180,15 +247,18 @@ def seed_description_templates(session: Session) -> None:
     for spec in seed_specs:
         existing = (
             session.query(DescriptionTemplate)
-            .filter_by(category=spec["category"])
+            .filter_by(category=spec["category"], material_type=spec["material_type"])
             .first()
         )
         if existing:
-            # Re-apply the two Christmas 3 training sections onto existing rows so
-            # already-seeded DBs pick up the dedicated Finish section and the
-            # enriched Best Gift sweep. Other user-editable sections are untouched.
-            existing.section_finish = spec["section_finish"]
-            existing.section_best_gifts_for = spec["section_best_gifts_for"]
+            # Upgrade sections still on an old default to the current text;
+            # sections the user rewrote in Settings are left untouched.
+            for field in _UPGRADABLE_FIELDS:
+                current = getattr(existing, field)
+                if field == "default_chain_text" and not current and not spec[field]:
+                    continue
+                if _is_legacy(current):
+                    setattr(existing, field, spec[field])
             continue
         session.add(DescriptionTemplate(**spec))
     session.commit()

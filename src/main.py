@@ -18,6 +18,7 @@ from src.web.routes import approval as approval_routes
 from src.web.routes import dashboard as dashboard_routes
 from src.web.routes import sourcing as sourcing_routes
 from src.web.routes import admin as admin_routes
+from src.web.routes import etsy as etsy_routes
 from src.web.routes import listings as listings_routes
 from src.web.routes import settings as settings_routes
 
@@ -100,6 +101,11 @@ _images_dir = Path(_settings.IMAGES_DIR)
 _images_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
 
+# Common listing images (gallery thumbnails on the images page)
+_assets_dir = Path(_settings.ASSETS_DIR)
+_assets_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="assets")
+
 templates = Jinja2Templates(directory="src/web/templates")
 # Jinja2 has no built-in urlencode filter; add one
 templates.env.filters["urlencode"] = quote_plus
@@ -111,6 +117,7 @@ approval_routes.set_templates(templates)
 dashboard_routes.set_templates(templates)
 admin_routes.set_templates(templates)
 settings_routes.set_templates(templates)
+etsy_routes.set_templates(templates)
 
 app.include_router(research_routes.router)
 app.include_router(input_routes.router)
@@ -121,6 +128,7 @@ app.include_router(sourcing_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(listings_routes.router)
 app.include_router(settings_routes.router)
+app.include_router(etsy_routes.router)
 
 
 @app.get("/")

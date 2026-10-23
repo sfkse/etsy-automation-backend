@@ -19,10 +19,10 @@ import numpy as np
 from src.domain.validators import OriginalityChecker
 from src.modules.content.description_generator import DescriptionGenerator
 
-# A neutral, cliché-free draft of valid length (150–220 words). Reused as the
+# A neutral, cliché-free intro of valid length (40–90 words). Reused as the
 # LLM output on every attempt — the tests drive behaviour through the mocked
 # originality check, not the draft content.
-_VALID_DRAFT = " ".join(["handmade"] * 170)
+_VALID_DRAFT = " ".join(["handmade"] * 60)
 
 
 def _angle() -> SimpleNamespace:
@@ -185,3 +185,32 @@ def test_find_similar_phrases_empty_corpus(mock_st_cls):
     checker = OriginalityChecker(session=session)
     assert checker.find_similar_phrases("Some draft sentence to compare.") == []
     mock_model.encode.assert_not_called()
+
+
+async def test_originality_check_runs_off_the_event_loop_thread():
+    """The embedding check is CPU-bound; running it on the loop thread froze
+    every other request during a description regeneration."""
+    import threading
+
+    loop_thread = threading.current_thread()
+    seen: list[threading.Thread] = []
+
+    def check(draft):
+        seen.append(threading.current_thread())
+        return (True, 0.1)
+
+    gen = _generator(check_returns=[])
+    gen.originality.check.side_effect = check
+    await gen.generate_for_angle(_product(), _angle(), "Paired Title", ["tag one"])
+
+    assert seen and seen[0] is not loop_thread
+
+
+def test_shared_model_loaded_once_per_process():
+    from src.domain import validators
+
+    with patch.object(validators, "SentenceTransformer") as st_cls:
+        a = OriginalityChecker(session=MagicMock()).model
+        b = OriginalityChecker(session=MagicMock()).model
+    assert a is b
+    st_cls.assert_called_once()

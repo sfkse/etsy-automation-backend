@@ -295,7 +295,7 @@
           <button type="button" class="btn btn-sm btn-outline-secondary copy-btn" data-copy-for="description">📋 Copy</button>
         </div>
         {% if editable %}
-        <textarea class="form-control form-control-sm editable-field" data-field="description" id="field-description" rows="8" style="white-space:pre-wrap;">{{ product.final_description or '' }}</textarea>
+        <textarea class="form-control form-control-sm editable-field" data-field="description" id="field-description" rows="60" style="white-space:pre-wrap;">{{ product.final_description or '' }}</textarea>
         {% else %}
         <p class="small text-muted mt-2 mb-0" id="field-description" style="white-space:pre-wrap;">{{ product.final_description }}</p>
         {% endif %}

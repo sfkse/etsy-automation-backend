@@ -1,30 +1,32 @@
 {% set desc_list = tabs.description_templates %}
+{% set material_labels = {'brass': 'brass', 'silver_925': 'silver', 'any': ''} %}
 {% set desc_fields = [
   ('section_intro', 'Intro'),
   ('section_how_to_order', 'How to order'),
   ('section_materials', 'Materials'),
+  ('section_finish', 'Finish / chain length'),
   ('section_packaging', 'Packaging'),
   ('section_gift_note', 'Gift note'),
   ('section_best_gifts_for', 'Best gifts for'),
   ('section_have_a_question', 'Have a question'),
-  ('brass_overrides', 'Brass overrides'),
-  ('silver_overrides', 'Silver overrides'),
   ('default_chain_text', 'Default chain text'),
 ] %}
 <div class="accordion" id="descriptionTemplatesAccordion">
   {% for t in desc_list %}
-  {% set slug = t.category | replace(' ', '-') %}
+  {% set material = t.material_type or 'any' %}
+  {% set slug = (t.category ~ '-' ~ material) | replace(' ', '-') %}
   <div class="accordion-item">
     <h2 class="accordion-header">
       <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button"
               data-bs-toggle="collapse" data-bs-target="#dt-{{ slug }}">
-        {{ t.category }}
+        {{ t.category }}{% if material != 'any' %} · {{ material_labels.get(material, material) }}{% endif %}
       </button>
     </h2>
     <div id="dt-{{ slug }}" class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
          data-bs-parent="#descriptionTemplatesAccordion">
       <div class="accordion-body">
         <form class="settings-form row g-3" data-settings-endpoint="/settings/description-templates/{{ t.category }}">
+          <input type="hidden" name="material_type" value="{{ material }}">
           {% for field, label in desc_fields %}
           <div class="col-md-6">
             <label class="form-label small text-muted">{{ label }}</label>
@@ -32,7 +34,7 @@
           </div>
           {% endfor %}
           <div class="col-12">
-            <button type="submit" class="btn btn-primary btn-sm">Save {{ t.category }}</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save {{ t.category }}{% if material != 'any' %} · {{ material_labels.get(material, material) }}{% endif %}</button>
           </div>
         </form>
       </div>
@@ -48,6 +50,13 @@
   <form class="settings-form row g-2 mt-2" data-settings-endpoint-template="/settings/description-templates/{name}" data-settings-name-field="category">
     <div class="col-md-3">
       <input type="text" name="category" class="form-control form-control-sm" placeholder="e.g. bracelet" required>
+    </div>
+    <div class="col-md-3">
+      <select name="material_type" class="form-select form-select-sm">
+        <option value="any">Any material</option>
+        <option value="brass">Brass</option>
+        <option value="silver_925">Silver (925)</option>
+      </select>
     </div>
     <div class="col-md-2">
       <button type="submit" class="btn btn-sm btn-success">Add</button>

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # Storage
     IMAGES_DIR: str = "./data/images"
+    # Common listing images (charts, care card …) offered in the images-page
+    # gallery and auto-attached by the jewelry-9 pipeline.
+    ASSETS_DIR: str = "./data/assets"
 
     # Public origin of this app (scheme + host[:port], no trailing slash), e.g.
     # "https://abc123.ngrok.app". Required for video generation: the video

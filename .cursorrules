@@ -19,7 +19,7 @@ You are a senior Python developer implementing a local-only Etsy jewelry-store a
 - **Title:** exactly 137-140 chars; comma-space separator (never pipe); first letter of each word capitalized; first 60 chars are niche description (no big terms like "Gift for Mom"); 2-3 synonyms for main product; max 1-2 big-search terms at end
 - **Forbidden words in title:** "Stone" (use CZ or Pave), "Pendant" alone (must be "Pendant Necklace"), "Solid Gold" + "Gold Plated" combo, repeated words, "Mother's Day Gift" (use "Gifts for Mom"), "Diamond" for brass/plated, "Floral" for letter-flowers (only visual flowers)
 - **Tags:** exactly 13. Distribution: 8-9 niche + 2-3 medium + 1-2 big. No duplicates with title's substantial phrases.
-- **Description:** 150-220 words. Originality ≥ 96% vs corpus (cosine similarity < 0.85 via sentence-transformers). No clichés from the static + research-derived blacklist.
+- **Description:** LLM writes a 40-90 word intro only; DescriptionEngine wraps it in the ★★ section scaffold (no word-count rule on the full text). Originality ≥ 96% vs corpus (cosine similarity < 0.85 via sentence-transformers). No clichés from the static + research-derived blacklist.
 - **Images:** minimum 8 per listing. SEO-named filenames. Alt text per image.
 - **Quantity:** 999 (confident) or 10-300 (test). Never 1 (kills algorithm).
 - **Renew:** 17:00 / 21:00 / 02:00 / 05:00 Turkey time.
