@@ -21,10 +21,30 @@
            class="form-control" value="{{ pr.multi_count_extra_pct if pr.multi_count_extra_pct is not none else 0 }}">
   </div>
 
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Currency symbol</label>
+    <input type="text" name="currency_symbol" maxlength="5"
+           class="form-control" value="{{ pr.currency_symbol or '$' }}" placeholder="e.g. $, kr, €">
+    <div class="form-text">Display only — Etsy prices by your shop's own currency regardless.</div>
+  </div>
+  <div class="col-md-3">
+    <label class="form-label small text-muted">Symbol position</label>
+    <select name="currency_symbol_position" class="form-control">
+      <option value="prefix" {% if (pr.currency_symbol_position or 'prefix') == 'prefix' %}selected{% endif %}>Before amount ($20.00)</option>
+      <option value="suffix" {% if pr.currency_symbol_position == 'suffix' %}selected{% endif %}>After amount (20.00 kr)</option>
+    </select>
+  </div>
+
   <div class="col-md-12">
     <label class="form-label small text-muted">Finish offsets % (JSON)</label>
     <textarea name="finish_offsets_pct" id="pf-finish-offsets" class="form-control font-monospace" rows="3" data-json="true">{{ (pr.finish_offsets_pct or {}) | tojson }}</textarea>
     <div class="form-text">Example: <code>{"Gold": 0, "Silver": -5, "Rose Gold": 10}</code></div>
+  </div>
+
+  <div class="col-md-12">
+    <label class="form-label small text-muted">Per-shipping-profile price adjustment % (JSON)</label>
+    <textarea name="region_price_adjustments_pct" class="form-control font-monospace" rows="2" data-json="true">{{ (pr.region_price_adjustments_pct or {}) | tojson }}</textarea>
+    <div class="form-text">Applied on top of every variant's price for that region's listing when publishing. Keys match your shipping profile regions. Example: <code>{"US": 0, "UK": 5, "DE": 10}</code></div>
   </div>
 
   <div class="col-md-3">

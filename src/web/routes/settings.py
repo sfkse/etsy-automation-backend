@@ -339,6 +339,8 @@ _PRICING_FIELDS = {
     "length_base_inches", "length_price_per_extra_inch_pct",
     "loss_leader_enabled", "loss_leader_finish", "loss_leader_length",
     "loss_leader_margin_pct", "multi_count_extra_pct",
+    "currency_symbol", "currency_symbol_position",
+    "region_price_adjustments_pct",
 }
 
 

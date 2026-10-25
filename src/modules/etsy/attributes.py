@@ -1,9 +1,12 @@
 """
 Etsy taxonomy attribute mapping for jewelry necklaces (Step 8.5).
 
-Jewelry > Necklaces taxonomy ID: 1588
+Jewelry > Necklaces taxonomy ID: 1217 (verified live against
+GET /application/seller-taxonomy/nodes — the previous constant, 1588, does
+not exist in Etsy's taxonomy tree at all and made every create_listing call
+fail with "invalid_marketplace: Oh dear, you cannot sell this item on Etsy.")
 Attribute IDs are stable Etsy API constants — keep this file as the single
-source of truth.  Run `GET /application/seller-taxonomy/nodes/1588/properties`
+source of truth. Run `GET /application/seller-taxonomy/nodes/1217/properties`
 to fetch the latest IDs and compare against the constants below.
 """
 from __future__ import annotations
@@ -13,7 +16,7 @@ from src.domain.carrier_pillar import CarrierPillar
 
 # ── Taxonomy ───────────────────────────────────────────────────────────────────
 
-JEWELRY_NECKLACE_TAXONOMY_ID = 1588
+JEWELRY_NECKLACE_TAXONOMY_ID = 1217
 
 # ── Attribute property IDs (Etsy Open API v3) ─────────────────────────────────
 

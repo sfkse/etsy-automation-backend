@@ -78,7 +78,7 @@
             {% if product.cost %}₺{{ "%.2f" | format(product.cost | float) }}{% else %}—{% endif %}
           </td>
           <td class="text-end text-muted">
-            {% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}
+            {% if product.selling_price %}{% if currency_position == 'suffix' %}{{ "%.2f" | format(product.selling_price | float) }}{{ currency_symbol }}{% else %}{{ currency_symbol }}{{ "%.2f" | format(product.selling_price | float) }}{% endif %}{% else %}—{% endif %}
           </td>
           <td class="text-muted small">{{ product.created_at.strftime('%Y-%m-%d') if product.created_at else '—' }}</td>
           <td class="text-end" onclick="event.stopPropagation();">

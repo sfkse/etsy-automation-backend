@@ -24,14 +24,30 @@
 <!-- Hidden overrides accumulator -->
 <input type="hidden" id="overrides-store" value="[]">
 
+{% if request.query_params.get("error") %}
+{% set err = request.query_params.get("error") %}
+<div class="alert alert-danger alert-dismissible fade show py-2 px-3 small" role="alert">
+  {% if err == "invalid_variant" %}Pick a variant first.
+  {% elif err == "not_connected" %}Content saved, but not connected to Etsy — <a href="/admin/etsy/connect">connect</a> first, then publish again.
+  {% elif err == "publish_in_progress" %}A publish run is already in progress — try again shortly.
+  {% else %}{{ err }}{% endif %}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 {% if product.status|lower in ('approved', 'published') %}
 <!-- ── Archived listing: variants stay browsable after approve/publish ─────── -->
 <div class="alert alert-success d-flex align-items-center gap-2 py-2 px-3 small mb-3 flex-wrap" role="note">
   <span aria-hidden="true">✅</span>
   <span>
     {% if product.status|lower == 'published' %}
-      Published as {{ (product.published_variant_ids or []) | length }} listing(s):
-      <strong>{{ (product.published_variant_ids or []) | join(', ') }}</strong>.
+      {% if product.etsy_listing_ids_by_profile %}
+        Published to Etsy as {{ product.etsy_listing_ids_by_profile | length }} listing(s):
+        <strong>{% for region, lid in product.etsy_listing_ids_by_profile.items() %}{{ region }} (<a href="https://www.etsy.com/listing/{{ lid }}" target="_blank" rel="noopener">{{ lid }}</a>){% if not loop.last %}, {% endif %}{% endfor %}</strong>.
+      {% else %}
+        Published as {{ (product.published_variant_ids or []) | length }} listing(s):
+        <strong>{{ (product.published_variant_ids or []) | join(', ') }}</strong>.
+      {% endif %}
     {% else %}
       Approved — selected variant <strong>{{ product.selected_variant_id or '—' }}</strong>
       {% if product.approved_at %} on {{ product.approved_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}.
@@ -45,11 +61,12 @@
   {% endif %}
 </div>
 {% else %}
-<!-- ── Multi-publish guidance ──────────────────────────────────────────────── -->
+<!-- ── Publish guidance ────────────────────────────────────────────────────── -->
 <div class="alert alert-info d-flex align-items-start gap-2 py-2 px-3 small mb-3" role="note">
   <span aria-hidden="true">💡</span>
-  <span>Trainer recommends publishing all 3 variants as separate listings — same
-    photos, different titles/tags. See which one Etsy's algorithm favors.</span>
+  <span>Pick the variant (radio button) whose title/tags/description you want live,
+    then Publish — it creates real draft listings on Etsy (one per configured
+    shipping profile) using that variant's content.</span>
 </div>
 {% endif %}
 
@@ -82,17 +99,6 @@
         </div>
 
         <div class="card-body p-3 d-flex flex-column gap-3">
-
-          <!-- Publish this variant as its own Etsy listing -->
-          <div class="form-check bg-light rounded p-2 mb-0 border">
-            <input class="form-check-input publish-checkbox" type="checkbox"
-                   name="variant_ids" value="{{ vid }}" id="publish-{{ vid }}"
-                   form="approve-form"
-                   {% if published_variant_ids %}{% if vid in published_variant_ids %}checked{% endif %}{% else %}checked{% endif %}>
-            <label class="form-check-label small fw-semibold" for="publish-{{ vid }}">
-              Publish this variant as a separate Etsy listing
-            </label>
-          </div>
 
           <!-- Strategy Rationale -->
           <div class="border-start border-3 border-secondary ps-2 text-muted small">
@@ -292,10 +298,11 @@
             <div class="col-6">
               <label class="form-label small text-muted mb-1">Price</label>
               <div class="input-group input-group-sm">
-                <span class="input-group-text">$</span>
+                {% if currency_position != 'suffix' %}<span class="input-group-text">{{ currency_symbol }}</span>{% endif %}
                 <input type="text" class="form-control"
                        value="{% if product.selling_price %}{{ '%.2f' | format(product.selling_price | float) }}{% else %}—{% endif %}"
                        readonly>
+                {% if currency_position == 'suffix' %}<span class="input-group-text">{{ currency_symbol }}</span>{% endif %}
               </div>
             </div>
             <div class="col-6">
@@ -315,13 +322,10 @@
     <div class="card-body d-flex flex-wrap gap-2 align-items-center">
 
       <button type="submit" class="btn btn-success fw-semibold px-4" id="publish-selected-btn"
-              formaction="/approval/{{ product.sku }}/publish">
-        🚀 Publish Selected as Separate Listings
-      </button>
-
-      <button type="button" class="btn btn-outline-success"
-              onclick="publishBest()">
-        ⭐ Publish Only Best (single listing)
+              formaction="/approval/{{ product.sku }}/publish"
+              title="Publishes the radio-selected variant's content to Etsy for real (one draft listing per shipping profile)."
+              onclick="return confirm('Publish the selected variant to Etsy now? This creates real draft listings on Etsy (reviewable there before you activate them).');">
+        🚀 Publish to Etsy
       </button>
 
       <button type="submit" class="btn btn-outline-warning" id="approve-btn">
@@ -752,21 +756,6 @@ document.querySelectorAll('.editable-field').forEach(el => {
     await autosave(variantId, field, value);
   });
 });
-
-
-// ── Publish only the single selected (radio) variant ──────────────────────────
-function publishBest() {
-  const vid = document.getElementById('selected-variant-input').value;
-  if (!vid) { alert('Pick a variant (radio) first.'); return; }
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = `/approval/${SKU}/publish`;
-  const inp = document.createElement('input');
-  inp.type = 'hidden'; inp.name = 'variant_ids'; inp.value = vid;
-  form.appendChild(inp);
-  document.body.appendChild(form);
-  form.submit();
-}
 
 
 // ── Save as draft ─────────────────────────────────────────────────────────────

@@ -97,7 +97,30 @@
           </div>
         </div>
 
-        <div class="alert alert-secondary mb-0">Publishing is currently disabled.</div>
+        {% if not connected %}
+        <div class="alert alert-secondary mb-0">Connect to Etsy first to publish.</div>
+        {% elif publish_running %}
+        <div class="alert alert-info mb-0">
+          A publish run is in progress in the background. Refresh to check status.
+        </div>
+        {% elif approved_count == 0 %}
+        <div class="alert alert-secondary mb-0">No approved products waiting to publish.</div>
+        {% elif remaining_today == 0 %}
+        <div class="alert alert-warning mb-0">Daily publish limit reached — try again tomorrow.</div>
+        {% else %}
+        <form method="POST" action="/admin/etsy/publish" class="d-flex flex-column gap-2">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text">SKUs (optional)</span>
+            <input type="text" name="skus_raw" class="form-control" placeholder="leave blank to publish all approved, comma-separated">
+          </div>
+          <button type="submit" class="btn btn-success">
+            🚀 Publish now (up to {{ remaining_today }} listing{{ 's' if remaining_today != 1 else '' }} today)
+          </button>
+          <small class="text-muted">
+            Each product publishes as one listing per configured shipping profile.
+          </small>
+        </form>
+        {% endif %}
       </div>
     </div>
   </div>

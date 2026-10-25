@@ -75,7 +75,29 @@ class EtsyClient:
                 method, endpoint, json=json, data=data, files=files, params=params
             )
 
-        resp.raise_for_status()
+        if resp.is_error:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = str(body.get("error") or body.get("message") or body) if isinstance(body, dict) else str(body)
+            except Exception:
+                detail = (resp.text or "").strip()
+            _log.error(
+                "Etsy API error",
+                method=method,
+                endpoint=endpoint,
+                status_code=resp.status_code,
+                detail=detail[:2000],
+            )
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise httpx.HTTPStatusError(
+                    f"{exc}. Etsy response: {detail[:2000]}",
+                    request=exc.request,
+                    response=exc.response,
+                ) from None
+
         if resp.content:
             return resp.json()
         return {}
@@ -101,6 +123,14 @@ class EtsyClient:
 
     async def get_shop_sections(self) -> list[dict]:
         resp = await self.get(f"/application/shops/{self.shop_id}/sections")
+        return resp.get("results", [])
+
+    async def get_readiness_state_definitions(self) -> list[dict]:
+        """Shop-level processing-time profiles Etsy now requires on every
+        physical listing (readiness_state_id) — 400s without one."""
+        resp = await self.get(
+            f"/application/shops/{self.shop_id}/readiness-state-definitions"
+        )
         return resp.get("results", [])
 
     async def create_shop_section(self, title: str) -> dict:

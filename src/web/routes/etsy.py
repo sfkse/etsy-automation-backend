@@ -19,7 +19,7 @@ from src.config.settings import Settings
 from src.db.dependencies import get_session
 from src.db.models import Product, ProductStatus
 from src.modules.etsy.client import EtsyClient
-from src.modules.etsy.publisher import bulk_publish
+from src.modules.etsy.publisher import activate_listing_for_region, build_full_listing_payload, bulk_publish
 from src.modules.etsy.token_manager import TokenManager
 
 _log = structlog.get_logger(__name__)
@@ -96,6 +96,7 @@ async def etsy_dashboard(
             "daily_limit": daily_limit,
             "remaining_today": max(0, daily_limit - published_today),
             "shop_id": _settings.ETSY_SHOP_ID,
+            "publish_running": _publish_running,
         },
     )
 
@@ -189,7 +190,7 @@ async def _run_bulk_publish_bg(approved_skus: list[str] | None) -> None:
             result = await bulk_publish(
                 client=_get_etsy_client(),
                 session=bg_session,
-                shipping_profile_id=_settings.SHIPPING_PROFILE_ID,
+                shipping_profiles=_settings.SHIPPING_PROFILES,
                 return_policy_id=_settings.RETURN_POLICY_ID,
                 shop_creation_date=_settings.SHOP_CREATION_DATE,
                 approved_skus=approved_skus,
@@ -204,6 +205,78 @@ async def _run_bulk_publish_bg(approved_skus: list[str] | None) -> None:
         _log.error("Bulk publish background task failed", error=str(exc))
     finally:
         _publish_running = False
+
+
+# ── Manual activation (draft → active for one region) ───────────────────────────
+
+@router.post("/activate/{sku}/{region}")
+async def etsy_activate_region(
+    sku: str,
+    region: str,
+    session: Session = Depends(get_session),
+):
+    """Explicit, user-triggered draft→active for one product's one region.
+
+    Never called automatically — publish always stops at draft so the user
+    can review on Etsy first.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return JSONResponse({"error": f"Unknown SKU: {sku}"}, status_code=404)
+
+    try:
+        listing_id = await activate_listing_for_region(_get_etsy_client(), product, region)
+    except KeyError:
+        return RedirectResponse(
+            url=f"/products/{sku}?error=no_draft_for_region", status_code=302
+        )
+    except Exception as exc:
+        _log.error("Manual activation failed", sku=sku, region=region, error=str(exc))
+        return RedirectResponse(
+            url=f"/products/{sku}?error=activate_failed", status_code=302
+        )
+
+    _log.info("Manually activated", sku=sku, region=region, listing_id=listing_id)
+    return RedirectResponse(url=f"/products/{sku}?activated={region}", status_code=302)
+
+
+# ── Payload preview (read-only, nothing sent) ───────────────────────────────────
+
+@router.get("/preview/{sku}", response_class=HTMLResponse)
+async def preview_payload(
+    sku: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Show the exact JSON that would be sent to Etsy for each shipping-
+    profile region, without sending anything — built from the same
+    build_full_listing_payload() the real publish path uses, so this can
+    never drift from reality.
+    """
+    product = session.query(Product).filter_by(sku=sku).first()
+    if product is None:
+        return RedirectResponse(url=f"/products/{sku}?error=not_found", status_code=302)
+
+    tm = _get_token_manager()
+    connected = tm.is_connected()
+    previews = []
+    if connected:
+        client = _get_etsy_client()
+        for region, shipping_profile_id in _settings.SHIPPING_PROFILES.items():
+            payloads = await build_full_listing_payload(
+                client, product, shipping_profile_id, _settings.RETURN_POLICY_ID,
+                session=session, region=region,
+            )
+            previews.append({"region": region, **payloads})
+
+    return _tmpl(
+        "etsy/preview_payload.html", request,
+        {
+            "product": product,
+            "connected": connected,
+            "previews": previews,
+        },
+    )
 
 
 # ── Disconnect ─────────────────────────────────────────────────────────────────

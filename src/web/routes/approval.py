@@ -26,8 +26,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from src.config.business_rules import MIN_IMAGES_PER_LISTING
+from src.config.settings import Settings
 from src.db.dependencies import get_session
-from src.db.models import Product, ProductImage, ProductStatus
+from src.db.models import PricingStrategy, Product, ProductImage, ProductStatus
 from src.modules.approval.service import (
     COPY_PASTE_FIELDS,
     QUEUE_STATUS_FILTERS,
@@ -37,7 +38,6 @@ from src.modules.approval.service import (
     get_copy_progress,
     get_variant_by_id,
     get_variation_matrix,
-    publish_variants,
     reject_and_regenerate,
     set_etsy_url,
     toggle_copy_progress,
@@ -54,6 +54,7 @@ from src.modules.llm.angles import angle_for_label
 from src.modules.etsy.payload_builder import EtsyListingPayloadBuilder
 
 _log = structlog.get_logger(__name__)
+_settings = Settings()
 
 router = APIRouter(prefix="/approval", tags=["approval"])
 templates: Jinja2Templates | None = None
@@ -199,6 +200,11 @@ async def approval_detail(
         else []
     )
 
+    # Display only — Etsy prices by the shop's own currency regardless; this
+    # just controls how this app's own admin pages show prices (e.g. "kr"
+    # suffix for a Swedish-currency shop instead of a hardcoded "$" prefix).
+    pricing = session.query(PricingStrategy).filter_by(id=1).first()
+
     return _tmpl(
         "approval/detail.html",
         request,
@@ -214,6 +220,8 @@ async def approval_detail(
             "status_badge_class": STATUS_BADGE_CLASS,
             "min_images": MIN_IMAGES_PER_LISTING,
             "low_images": len(images) < MIN_IMAGES_PER_LISTING,
+            "currency_symbol": (pricing.currency_symbol if pricing else None) or "$",
+            "currency_position": (pricing.currency_symbol_position if pricing else None) or "prefix",
         },
     )
 
@@ -312,30 +320,71 @@ async def approve_selected(
     return RedirectResponse(url=f"/approval/{sku}", status_code=303)
 
 
-# ── Publish selected variants as separate listings ────────────────────────────
+# ── Publish selected variant to Etsy for real ──────────────────────────────────
 
 @router.post("/{sku}/publish")
 async def publish_selected(
     sku: str,
+    background_tasks: BackgroundTasks,
+    variant_id: str = Form(default=""),
     variant_ids: list[str] = Form(default=[]),
     session: Session = Depends(get_session),
 ):
-    """Mark the checked variants as published (each is its own Etsy listing) and
-    redirect to the copy-paste helper. No Etsy API call — the user pastes manually.
+    """Approve the selected variant's content, then run the real Etsy publish
+    pipeline for this product in the background (the same bulk_publish() that
+    /admin/etsy/publish uses) — one listing per configured shipping profile.
 
-    Both approval-detail submit buttons post here: "Publish Selected as Separate
-    Listings" sends the checkbox group; "Publish Only Best" sends a single id."""
+    Both approval-detail submit buttons post here: the main submit button
+    sends the radio-selected `variant_id`; "Publish Only Best" sends a single
+    `variant_ids` entry. Etsy's API publishes one title/description per
+    product, not one per content-variant, so only the first id is used.
+    """
+    import src.web.routes.etsy as etsy_routes
+
     product = session.query(Product).filter_by(sku=sku).first()
     if product is None:
         return RedirectResponse(url="/approval", status_code=303)
 
-    if not publish_variants(session, product, variant_ids):
-        # Nothing valid selected — bounce back to the comparison view.
-        return RedirectResponse(url=f"/approval/{sku}", status_code=303)
+    chosen = variant_id or (variant_ids[0] if variant_ids else "")
+    if not chosen or not approve_variant(session, product, chosen):
+        return RedirectResponse(url=f"/approval/{sku}?error=invalid_variant", status_code=303)
 
-    return RedirectResponse(
-        url=f"/approval/{sku}/copy-paste-helper", status_code=303
-    )
+    if not etsy_routes._get_token_manager().is_connected():
+        return RedirectResponse(url=f"/approval/{sku}?error=not_connected", status_code=303)
+
+    if etsy_routes._publish_running:
+        return RedirectResponse(url=f"/approval/{sku}?error=publish_in_progress", status_code=303)
+
+    background_tasks.add_task(_run_real_publish_bg, sku=sku)
+    return RedirectResponse(url=f"/products/{sku}?publishing=1", status_code=303)
+
+
+async def _run_real_publish_bg(sku: str) -> None:
+    import src.web.routes.etsy as etsy_routes
+    from src.db.session import SessionLocal
+    from src.modules.etsy.publisher import bulk_publish
+
+    etsy_routes._publish_running = True
+    try:
+        with SessionLocal() as bg_session:
+            result = await bulk_publish(
+                client=etsy_routes._get_etsy_client(),
+                session=bg_session,
+                shipping_profiles=_settings.SHIPPING_PROFILES,
+                return_policy_id=_settings.RETURN_POLICY_ID,
+                shop_creation_date=_settings.SHOP_CREATION_DATE,
+                approved_skus=[sku],
+            )
+            _log.info(
+                "Real publish from approval page complete",
+                sku=sku,
+                published=result["published"],
+                errors=result["errors"],
+            )
+    except Exception as exc:
+        _log.error("Real publish from approval page failed", sku=sku, error=str(exc))
+    finally:
+        etsy_routes._publish_running = False
 
 
 # ── Copy-paste helper (per-variant manual publish workflow) ────────────────────

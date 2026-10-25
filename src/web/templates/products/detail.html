@@ -218,7 +218,7 @@
             {% if editable %}
             <input type="number" step="0.01" min="0.01" class="form-control form-control-sm editable-field" data-field="selling_price" value="{{ product.selling_price or '' }}">
             <span class="field-save-status small" data-status-for="selling_price"></span>
-            {% else %}{% if product.selling_price %}${{ "%.2f" | format(product.selling_price | float) }}{% else %}—{% endif %}{% endif %}
+            {% else %}{% if product.selling_price %}{% if currency_position == 'suffix' %}{{ "%.2f" | format(product.selling_price | float) }}{{ currency_symbol }}{% else %}{{ currency_symbol }}{{ "%.2f" | format(product.selling_price | float) }}{% endif %}{% else %}—{% endif %}{% endif %}
           </dd>
 
           {% if product.cost and product.selling_price %}
@@ -305,16 +305,344 @@
     </div>
     {% endif %}
 
-    {% if product.etsy_listing_id %}
+    {% if product.etsy_listing_id or product.etsy_draft_listing_ids_by_profile %}
     <div class="card border-0 shadow-sm mb-4">
       <div class="card-header fw-semibold bg-white border-bottom">Etsy Listing</div>
       <div class="card-body">
         <dl class="row mb-0">
+          {% if product.etsy_listing_id %}
           <dt class="col-sm-4 text-muted">Listing ID</dt>
           <dd class="col-sm-8"><code>{{ product.etsy_listing_id }}</code></dd>
           <dt class="col-sm-4 text-muted">Published</dt>
           <dd class="col-sm-8">{{ product.published_at.strftime('%Y-%m-%d %H:%M') if product.published_at else '—' }}</dd>
+          {% endif %}
+          {% if product.etsy_listing_ids_by_profile %}
+          <dt class="col-sm-4 text-muted">Draft listings by region</dt>
+          <dd class="col-sm-8">
+            {% if request.query_params.get("activated") %}
+            <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">
+              {{ request.query_params.get("activated") }} activated.
+              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            {% endif %}
+            {% if request.query_params.get("error") in ("activate_failed", "no_draft_for_region") %}
+            <div class="alert alert-danger alert-dismissible fade show py-1 px-2 small" role="alert">
+              Activation failed — check this listing on Etsy directly.
+              <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            {% endif %}
+            {% for region, listing_id in product.etsy_listing_ids_by_profile.items() %}
+            <div class="d-flex align-items-center gap-2 mb-1">
+              <a href="https://www.etsy.com/listing/{{ listing_id }}" target="_blank" rel="noopener">{{ region }}: <code>{{ listing_id }}</code></a>
+              <form method="POST" action="/admin/etsy/activate/{{ product.sku }}/{{ region }}"
+                    onsubmit="return confirm('Review this draft on Etsy before activating — make it live now?')">
+                <button type="submit" class="btn btn-sm btn-outline-success py-0">Activate</button>
+              </form>
+            </div>
+            {% endfor %}
+            <small class="text-muted">Review on Etsy before activating — publish always stops at draft.</small>
+          </dd>
+          {% endif %}
+          {% if product.etsy_draft_listing_ids_by_profile %}
+          <dt class="col-sm-4 text-muted">⚠ Orphaned drafts</dt>
+          <dd class="col-sm-8">
+            {% for region, listing_id in product.etsy_draft_listing_ids_by_profile.items() %}
+            <span class="text-warning">{{ region }}: <code>{{ listing_id }}</code></span><br>
+            {% endfor %}
+            <small class="text-muted">
+              Publish failed after Etsy created these drafts — find them in Etsy's
+              Shop Manager &rarr; Listings &rarr; Drafts to finish or delete manually.
+            </small>
+          </dd>
+          {% endif %}
         </dl>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card border-0 shadow-sm mb-4" id="variants-card">
+      <div class="card-header fw-semibold bg-white border-bottom">Variants</div>
+      <div class="card-body">
+        {% if request.query_params.get("publishing") %}
+        <div class="alert alert-info alert-dismissible fade show py-1 px-2 small" role="alert">
+          Publishing to Etsy in the background — refresh this page in a bit to see the real listing IDs.
+          <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+        {% endif %}
+        {% if request.query_params.get("price_updated") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">Price updated.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("axes_regenerated") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">Variants regenerated from Rexven.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("variants_reset") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">All variants cleared.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("bulk_price_applied") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">Price applied to {{ request.query_params.get("bulk_price_applied") }} row(s).<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("variations_restored") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">Missing combinations restored.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("axis_added") or request.query_params.get("axis_renamed") or request.query_params.get("value_added") or request.query_params.get("axis_deleted") or request.query_params.get("value_deleted") or request.query_params.get("row_deleted") %}
+        <div class="alert alert-success alert-dismissible fade show py-1 px-2 small" role="alert">Saved.<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+        {% if request.query_params.get("error") %}
+        <div class="alert alert-danger alert-dismissible fade show py-1 px-2 small" role="alert">{{ request.query_params.get("error") }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>
+        {% endif %}
+
+        {% set multi_value_axis_count = product.variant_axes | rejectattr('values', 'eq', None) | map(attribute='values') | map('length') | select('gt', 1) | list | length %}
+        {% if multi_value_axis_count > 2 %}
+        <div class="alert alert-warning py-2 px-3 small" role="alert">
+          ⚠ {{ multi_value_axis_count }} of your variation types have more than one option.
+          Etsy only supports <strong>2</strong> variation properties per listing — publishing
+          this as-is will create a draft on Etsy and then fail (the same "orphaned drafts"
+          error). Reduce to 2 multi-option variation types, or make the extras single-valued.
+        </div>
+        {% endif %}
+
+        <div class="d-flex justify-content-between align-items-center mb-3">
+          <p class="small text-muted mb-0">
+            Etsy SKU (one, shared across every variant):
+            {% if product.rexven_sku %}<code>{{ product.rexven_sku }}</code>{% else %}<span class="text-warning">none set — Etsy's SKU field will be left blank</span>{% endif %}
+          </p>
+          <div class="d-flex gap-2">
+            <a href="/admin/etsy/preview/{{ product.sku }}" class="btn btn-sm btn-outline-secondary" target="_blank">
+              { } Preview payload
+            </a>
+            {% if product.supplier_options %}
+            <form method="POST" action="/listings/{{ product.sku }}/regenerate-from-rexven"
+                  onsubmit="return confirm('Replace all current variants with ones derived from this product\'s captured Rexven options?')">
+              <button type="submit" class="btn btn-sm btn-outline-secondary">↻ Regenerate from Rexven</button>
+            </form>
+            {% endif %}
+            {% if product.variant_axes %}
+            <form method="POST" action="/listings/{{ product.sku }}/variations/restore-missing">
+              <button type="submit" class="btn btn-sm btn-outline-secondary" title="Refill any combination you deleted individually — prices on rows you kept are untouched.">+ Restore missing combinations</button>
+            </form>
+            {% endif %}
+            {% if product.variant_axes or variation_rows %}
+            <form method="POST" action="/listings/{{ product.sku }}/variations/reset"
+                  onsubmit="return confirm('Clear ALL variants and pricing rows for this product? This cannot be undone.')">
+              <button type="submit" class="btn btn-sm btn-outline-danger">Reset all variants</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+
+        {% for axis in product.variant_axes %}
+        <div class="border rounded p-3 mb-3">
+          <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+            <div class="d-flex align-items-center gap-2">
+              <h6 class="mb-0">{{ axis.name }}</h6>
+              <form method="POST" action="/listings/{{ product.sku }}/axes/{{ axis.name }}/affects-price">
+                {% if axis.get('affects_price', True) %}
+                <button type="submit" class="btn btn-sm btn-outline-success py-0" title="Click to make this not affect price">Affects price</button>
+                {% else %}
+                <button type="submit" class="btn btn-sm btn-outline-secondary py-0" title="Click to make this affect price">Doesn't affect price</button>
+                {% endif %}
+              </form>
+            </div>
+            <div class="d-flex align-items-end gap-2">
+              <form method="POST" action="/listings/{{ product.sku }}/axes/{{ axis.name }}/rename"
+                    class="d-flex align-items-end gap-1">
+                <div>
+                  <label class="form-label small text-muted mb-0">Rename to</label>
+                  <input type="text" name="new_name" class="form-control form-control-sm" style="width: 140px;">
+                </div>
+                <button type="submit" class="btn btn-sm btn-outline-secondary">Rename</button>
+              </form>
+              <form method="POST" action="/listings/{{ product.sku }}/axes/{{ axis.name }}/delete"
+                    onsubmit="return confirm('Delete the whole {{ axis.name }} variation and all its pricing rows?')">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Delete variation</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="mb-2">
+            {% for value in axis['values'] %}
+            <form method="POST" action="/listings/{{ product.sku }}/axes/{{ axis.name }}/values/{{ value }}/delete"
+                  style="display:inline;" onsubmit="return confirm('Remove {{ value }} from {{ axis.name }}?')">
+              <button type="submit" class="tag-chip border-0" title="Remove {{ value }}">{{ value }} ×</button>
+            </form>
+            {% endfor %}
+          </div>
+
+          <form method="POST" action="/listings/{{ product.sku }}/axes/{{ axis.name }}/values"
+                class="d-flex align-items-end gap-1">
+            <div>
+              <label class="form-label small text-muted mb-0">Add option</label>
+              <input type="text" name="value" placeholder="e.g. Rose Gold" class="form-control form-control-sm" style="width: 160px;">
+            </div>
+            <button type="submit" class="btn btn-sm btn-outline-secondary">+ Add option</button>
+          </form>
+        </div>
+        {% endfor %}
+
+        {% if price_groups %}
+        <h6 class="text-muted mt-4 mb-2">Quick price</h6>
+        <p class="small text-muted mb-2">
+          These variants don't affect price (e.g. length) — set one price per
+          {{ price_groups[0]['values'].keys() | join('/') }} and it applies to every combination at once.
+        </p>
+        {% for group in price_groups %}
+        <form method="POST" action="/listings/{{ product.sku }}/variations/bulk-price"
+              class="d-flex align-items-center gap-2 mb-2">
+          {% for row_id in group.row_ids %}
+          <input type="hidden" name="row_ids" value="{{ row_id }}">
+          {% endfor %}
+          <span style="width: 160px;">
+            {% for value in group['values'].values() %}<span class="tag-chip">{{ value }}</span>{% endfor %}
+          </span>
+          <span class="text-muted small">({{ group.row_ids | length }} variants)</span>
+          {% if currency_position != 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+          <input type="number" step="0.01" min="0" name="price"
+                 value="{{ '%.2f' % (group.price_cents / 100.0) if group.price_cents is not none else '' }}"
+                 placeholder="{{ 'mixed' if group.price_cents is none else '' }}"
+                 class="form-control form-control-sm" style="width: 90px;">
+          {% if currency_position == 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+          <button type="submit" class="btn btn-sm btn-outline-primary py-0">Apply to all</button>
+        </form>
+        {% endfor %}
+        {% endif %}
+
+        {% if variation_rows %}
+        <div class="d-flex justify-content-between align-items-center mt-4 mb-2">
+          <h6 class="text-muted mb-0">All variants</h6>
+          {% if region_price_preview.regions %}
+          <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#regionPreviewModal">
+            Preview by region
+          </button>
+          {% endif %}
+        </div>
+        <form id="bulk-price-form" method="POST" action="/listings/{{ product.sku }}/variations/bulk-price"></form>
+        <table class="table table-sm mb-2">
+          <thead>
+            <tr>
+              <th><input type="checkbox" title="Select all"
+                         onclick="document.querySelectorAll('.variant-row-select').forEach(function(cb){ cb.checked = this.checked; }, this)"></th>
+              <th>Variant</th>
+              <th>Price</th>
+              <th class="text-muted">Internal ref</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in variation_rows %}
+            <tr>
+              <td><input type="checkbox" name="row_ids" value="{{ row.id }}" form="bulk-price-form" class="variant-row-select"></td>
+              <td>
+                {% if row.axis_values %}
+                {% for value in row.axis_values.values() %}<span class="tag-chip">{{ value }}</span>{% endfor %}
+                {% else %}
+                {{ row.finish }}{% if row.length_inches %} / {{ row.length_inches }}"{% endif %}{% if row.multi_count %} / {{ row.multi_count }}{% endif %}
+                {% endif %}
+              </td>
+              <td>
+                <form method="POST" action="/listings/{{ product.sku }}/variations/{{ row.id }}/price"
+                      class="d-flex align-items-center gap-1">
+                  {% if currency_position != 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+                  <input type="number" step="0.01" min="0" name="price" value="{{ '%.2f' % (row.price_cents / 100.0) }}"
+                         class="form-control form-control-sm" style="width: 90px;">
+                  {% if currency_position == 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+                  <button type="submit" class="btn btn-sm btn-outline-primary py-0">Save</button>
+                </form>
+              </td>
+              <td class="text-muted small"><code>{{ row.sku_suffix }}</code></td>
+              <td>
+                <form method="POST" action="/listings/{{ product.sku }}/variations/{{ row.id }}/delete"
+                      onsubmit="return confirm('Remove this variant combination?')">
+                  <button type="submit" class="btn btn-sm btn-outline-danger py-0">Delete</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <div class="d-flex align-items-end gap-1 mb-4">
+          <div>
+            <label class="form-label small text-muted mb-0">Bulk price for checked rows</label>
+            <div class="d-flex align-items-center gap-1">
+              {% if currency_position != 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+              <input type="number" step="0.01" min="0" name="price" form="bulk-price-form" placeholder="e.g. 24.99" class="form-control form-control-sm" style="width: 100px;">
+              {% if currency_position == 'suffix' %}<span>{{ currency_symbol }}</span>{% endif %}
+            </div>
+          </div>
+          <button type="submit" form="bulk-price-form" class="btn btn-sm btn-outline-primary">Apply to checked</button>
+        </div>
+        {% endif %}
+
+        {% set standard_axes_to_offer = standard_axes | rejectattr('name', 'in', product.variant_axes | map(attribute='name') | list) | list %}
+        {% if standard_axes_to_offer %}
+        <div class="d-flex align-items-center gap-2 flex-wrap mb-3">
+          <span class="small text-muted">Quick add:</span>
+          {% for std_axis in standard_axes_to_offer %}
+          <form method="POST" action="/listings/{{ product.sku }}/axes" class="d-inline">
+            <input type="hidden" name="name" value="{{ std_axis.name }}">
+            <input type="hidden" name="values" value="{{ std_axis['values'] | join(', ') }}">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">+ {{ std_axis.name }}</button>
+          </form>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="border border-dashed rounded p-3 text-center" style="border-style: dashed !important;">
+          <form method="POST" action="/listings/{{ product.sku }}/axes">
+            <div class="row g-2 justify-content-center align-items-end">
+              <div class="col-auto text-start">
+                <label class="form-label small text-muted mb-0">Variation name</label>
+                <input type="text" name="name" placeholder="e.g. Birthstone" class="form-control form-control-sm">
+              </div>
+              <div class="col-auto text-start">
+                <label class="form-label small text-muted mb-0">Options (comma-separated)</label>
+                <input type="text" name="values" placeholder="e.g. Ruby, Sapphire, Emerald" class="form-control form-control-sm" style="width: 240px;">
+              </div>
+              <div class="col-auto">
+                <button type="submit" class="btn btn-sm btn-success">+ Add variation</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    {% if region_price_preview.regions %}
+    <div class="modal fade" id="regionPreviewModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Price preview by shipping profile</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="small text-muted">
+              Read-only — computed from today's per-shipping-profile adjustment
+              (<a href="/settings#pricing-strategy">Settings → Pricing Strategy</a>). Nothing is published from here.
+            </p>
+            <table class="table table-sm table-bordered mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Variant</th>
+                  {% for region in region_price_preview.regions %}
+                  <th class="text-end">{{ region }}</th>
+                  {% endfor %}
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in region_price_preview.rows %}
+                <tr>
+                  <td>{{ row.label }}</td>
+                  {% for region in region_price_preview.regions %}
+                  <td class="text-end">
+                    {% if currency_position == 'suffix' %}{{ '%.2f' % row.prices[region] }}{{ currency_symbol }}{% else %}{{ currency_symbol }}{{ '%.2f' % row.prices[region] }}{% endif %}
+                  </td>
+                  {% endfor %}
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
     {% endif %}

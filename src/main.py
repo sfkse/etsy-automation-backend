@@ -94,6 +94,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def _no_store_dynamic_pages(request, call_next):
+    """Disable browser caching (including back-forward cache) for every
+    dynamic page. Every route here renders live, mutable DB state — a
+    user hitting Back after editing variants/pricing/listings must never
+    see a stale snapshot that looks like their changes vanished."""
+    response = await call_next(request)
+    if not request.url.path.startswith(("/static", "/images", "/assets")):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 app.mount("/static", StaticFiles(directory="src/web/static"), name="static")
 
 # Serve generated images from the data directory

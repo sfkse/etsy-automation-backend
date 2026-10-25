@@ -318,6 +318,7 @@ class TestFullPipelineIntegration:
         mock_client.patch = AsyncMock(return_value={})
         mock_client.request = AsyncMock(return_value={})
         mock_client.get_shop_sections = AsyncMock(return_value=[])
+        mock_client.get_readiness_state_definitions = AsyncMock(return_value=[])
 
         # Mock session: query(ProductImage).filter_by(is_selected=True).order_by().all()
         selected_img = MagicMock(spec=ProductImage)
@@ -366,6 +367,7 @@ class TestFullPipelineIntegration:
         mock_client.patch = AsyncMock(return_value={})
         mock_client.request = AsyncMock(return_value={})
         mock_client.get_shop_sections = AsyncMock(return_value=[])
+        mock_client.get_readiness_state_definitions = AsyncMock(return_value=[])
 
         selected_img = MagicMock(spec=ProductImage)
         selected_img.file_path = "/tmp/taki-0001.jpg"

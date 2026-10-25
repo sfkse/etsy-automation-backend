@@ -26,10 +26,23 @@ class Settings(BaseSettings):
     ETSY_SHOP_ID: str = ""
     ETSY_REDIRECT_URI: str = "http://localhost:8000/admin/etsy/callback"
 
-    # Etsy shop configuration
-    SHIPPING_PROFILE_ID: int = 0
+    # Etsy shop configuration — one shipping profile per region; each becomes
+    # its own Etsy listing when a product is published (see publisher.py).
+    SHIPPING_PROFILE_ID_US: int = 0
+    SHIPPING_PROFILE_ID_UK: int = 0
+    SHIPPING_PROFILE_ID_DE: int = 0
     RETURN_POLICY_ID: int = 0
     SHOP_CREATION_DATE: str = ""  # ISO date, e.g. "2024-06-01" — used for new-shop limits
+
+    @property
+    def SHIPPING_PROFILES(self) -> dict[str, int]:
+        """Region label -> shipping_profile_id, skipping unconfigured (0) ones."""
+        candidates = {
+            "US": self.SHIPPING_PROFILE_ID_US,
+            "UK": self.SHIPPING_PROFILE_ID_UK,
+            "DE": self.SHIPPING_PROFILE_ID_DE,
+        }
+        return {region: pid for region, pid in candidates.items() if pid}
 
     # Database
     DATABASE_URL: str = "postgresql+psycopg://etsy:etsy_local_dev@localhost:5432/etsy_taki"

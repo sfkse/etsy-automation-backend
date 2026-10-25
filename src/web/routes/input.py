@@ -22,6 +22,7 @@ from src.config.settings import Settings
 from src.db.dependencies import get_session
 from src.db.models import (
     ApprovalOverride,
+    PricingStrategy,
     Product,
     ProductImage,
     ProductStats,
@@ -31,6 +32,7 @@ from src.db.models import (
     VariationRow,
 )
 from src.modules.images import regen_jobs
+from src.modules.listings.variant_axes import STANDARD_AXES, price_groups
 from src.modules.images.comparison import run_comparison
 from src.modules.images.jewelry_set import DEFAULT_PALETTE, palette_choices
 from src.modules.images.pipeline import run_image_pipeline
@@ -105,6 +107,53 @@ STATUS_BADGE_CLASS: dict[str, str] = {
 }
 
 
+def _currency_context(session: Session) -> dict:
+    """Display-only currency symbol/position (PricingStrategy.currency_symbol)
+    — Etsy prices by the shop's own currency regardless; this just controls
+    how this app's own admin pages show prices (e.g. "kr" suffix for SEK)."""
+    pricing = session.query(PricingStrategy).filter_by(id=1).first()
+    return {
+        "currency_symbol": (pricing.currency_symbol if pricing else None) or "$",
+        "currency_position": (pricing.currency_symbol_position if pricing else None) or "prefix",
+    }
+
+
+def _variant_row_label(row: VariationRow) -> str:
+    """Human-readable combination label, matching the template's own display
+    logic (generic axis_values dict, or legacy finish/length/multi_count)."""
+    if row.axis_values:
+        return " / ".join(str(v) for v in row.axis_values.values())
+    parts = [row.finish or ""]
+    if row.length_inches:
+        parts.append(f'{row.length_inches}"')
+    if row.multi_count:
+        parts.append(str(row.multi_count))
+    return " / ".join(p for p in parts if p)
+
+
+def _region_price_preview(session: Session, variation_rows: list[VariationRow]) -> dict:
+    """Preview what each variant row would cost per shipping-profile region,
+    using today's PricingStrategy.region_price_adjustments_pct — read-only,
+    doesn't publish or change anything. Powers the "Preview by region" modal.
+    """
+    regions = list(_settings.SHIPPING_PROFILES.keys())
+    if not regions or not variation_rows:
+        return {"regions": [], "rows": []}
+
+    pricing = session.query(PricingStrategy).filter_by(id=1).first()
+    adjustments = (pricing.region_price_adjustments_pct if pricing else None) or {}
+    multipliers = {r: 1.0 + (adjustments.get(r, 0.0) or 0.0) / 100.0 for r in regions}
+
+    rows = []
+    for row in variation_rows:
+        base = row.price_cents / 100.0
+        rows.append({
+            "label": _variant_row_label(row),
+            "prices": {r: round(base * multipliers[r], 2) for r in regions},
+        })
+    return {"regions": regions, "rows": rows}
+
+
 # ── Product List ───────────────────────────────────────────────────────────────
 
 @router.get("", response_class=HTMLResponse)
@@ -134,6 +183,7 @@ async def product_list(
             "sort": sort,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
+            **_currency_context(session),
         },
     )
 
@@ -156,6 +206,7 @@ async def product_detail(
                 "sort": "newest",
                 "status_labels": STATUS_LABELS,
                 "status_badge_class": STATUS_BADGE_CLASS,
+                **_currency_context(session),
                 "error": f"Product {sku} not found.",
             },
             status_code=404,
@@ -180,15 +231,29 @@ async def product_detail(
             pass
         img.cache_url = url
 
+    variation_rows = (
+        session.query(VariationRow)
+        .filter_by(product_id=product.id)
+        .order_by(VariationRow.finish, VariationRow.length_inches, VariationRow.multi_count)
+        .all()
+    )
+
+    region_price_preview = _region_price_preview(session, variation_rows)
+
     return _tmpl(
         "products/detail.html", request,
         {
             "product": product,
             "images": images,
+            "variation_rows": variation_rows,
+            "standard_axes": STANDARD_AXES,
+            "price_groups": price_groups(variation_rows, product.variant_axes or []),
+            "region_price_preview": region_price_preview,
             "status_labels": STATUS_LABELS,
             "status_badge_class": STATUS_BADGE_CLASS,
             "workflow_options": WORKFLOW_OPTIONS,
             "default_workflow": _settings.DEFAULT_IMAGE_WORKFLOW,
+            **_currency_context(session),
         },
     )
 

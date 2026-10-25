@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Payload Preview — {{ product.sku }}{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+  <div class="col">
+    <h2>Payload Preview — {{ product.sku }}</h2>
+    <p class="text-muted">
+      Exactly what would be sent to Etsy if you published now — built from the
+      same code the real publish uses. <strong>Read-only: nothing is sent from
+      this page.</strong>
+    </p>
+    <a href="/products/{{ product.sku }}" class="btn btn-sm btn-outline-secondary">&larr; Back to product</a>
+  </div>
+</div>
+
+{% if not connected %}
+<div class="alert alert-warning">
+  Not connected to Etsy — <code>readiness_state_id</code> can't be resolved
+  without a live connection, so no preview is shown. <a href="/admin/etsy/connect">Connect to Etsy</a> first.
+</div>
+{% else %}
+{% for preview in previews %}
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-header fw-semibold bg-white border-bottom">{{ preview.region }}</div>
+  <div class="card-body">
+    <h6 class="text-muted">POST /application/shops/{shop_id}/listings</h6>
+    <pre class="bg-light p-3 rounded small" style="white-space: pre-wrap;">{{ preview.listing | tojson(indent=2) }}</pre>
+
+    {% if preview.inventory %}
+    <h6 class="text-muted mt-3">PUT /application/listings/{listing_id}/inventory</h6>
+    <pre class="bg-light p-3 rounded small" style="white-space: pre-wrap;">{{ preview.inventory | tojson(indent=2) }}</pre>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

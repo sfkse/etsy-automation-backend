@@ -31,6 +31,7 @@ from src.db.models import (
     KeywordScore,
     MaterialType,
     PersonalizationTemplate,
+    PricingStrategy,
     Product,
     ProductStatus,
     ShopSection,
@@ -44,6 +45,10 @@ from src.db.session import SessionLocal
 from src.modules.input import generate_sku
 from src.modules.listings.description_engine import DescriptionEngine
 from src.modules.listings.personalization_picker import PersonalizationPicker
+from src.modules.listings.variant_axes import (
+    generate_variant_rows,
+    seed_variant_axes_from_rexven,
+)
 from src.modules.listings.variation_builder import VariationMatrixBuilder
 from src.sourcing.rexven_normalizer import reconcile_preset
 from src.sourcing.rexven_scraper import scrape_rexven_product
@@ -273,11 +278,20 @@ class ListingBuilder:
 
         self._log_preset_mismatch(preset, supplier_options, req.rexven_sku)
 
-        matrix = self.variation_builder.build(
-            preset_name=preset_name,
-            rexven_cost_cents=cost_cents,
-            override_base_price_cents=req.override_base_price_cents,
-        )
+        # Prefer the supplier's own stated options over the preset when they
+        # describe a real multi-value domain — fixes the known failure where
+        # a preset offers a finish the supplier doesn't stock (see
+        # _log_preset_mismatch). Falls back to the preset-driven matrix when
+        # the supplier options don't yield any usable axes (no Rexven source,
+        # single-value domains only, etc).
+        variant_axes = seed_variant_axes_from_rexven(supplier_options)
+        matrix: list = []
+        if not variant_axes:
+            matrix = self.variation_builder.build(
+                preset_name=preset_name,
+                rexven_cost_cents=cost_cents,
+                override_base_price_cents=req.override_base_price_cents,
+            )
 
         personalization = self.personalization_picker.pick(
             req.personalization_choice, req.category
@@ -305,6 +319,7 @@ class ListingBuilder:
             supplier_shipping_cents=req.supplier_shipping_cents,
             supplier_total_cents=req.supplier_total_cents,
             supplier_options=supplier_options or None,
+            variant_axes=variant_axes,
             # Descriptive columns that already have readers but have always been
             # NULL: description_generator._product_summary builds "Color:",
             # "Style:" and "Size/Length:" lines from these, and
@@ -321,6 +336,7 @@ class ListingBuilder:
         self.session.add(product)
         self.session.flush()   # populate product.id for FK on VariationRow
 
+        axis_rows: list[dict] = []
         for cell in matrix:
             self.session.add(VariationRow(
                 product_id=product.id,
@@ -331,10 +347,33 @@ class ListingBuilder:
                 sku_suffix=cell.sku_suffix,
                 is_loss_leader=cell.is_loss_leader,
             ))
+        if variant_axes:
+            pricing = self.session.query(PricingStrategy).first()
+            base_multiplier = (pricing.base_multiplier if pricing else None) or 4.0
+            base_price_cents = (
+                req.override_base_price_cents
+                if req.override_base_price_cents is not None
+                else int(cost_cents * base_multiplier)
+            )
+            # Flat price across every new combination by default — no silent
+            # per-value variance. Differentiate specific variants afterward
+            # via the product page's bulk-price tool (select the ones that
+            # should differ, apply a custom price just to those).
+            axis_rows = generate_variant_rows(variant_axes, base_price_cents)
+            for row in axis_rows:
+                self.session.add(VariationRow(
+                    product_id=product.id,
+                    axis_values=row["axis_values"],
+                    price_cents=row["price_cents"],
+                    sku_suffix=row["sku_suffix"],
+                ))
 
         # Persist a base selling price for legacy fields (min-cell price)
         if matrix:
             min_price = min(c.price_cents for c in matrix)
+            product.selling_price = Decimal(min_price) / Decimal(100)
+        elif axis_rows:
+            min_price = min(r["price_cents"] for r in axis_rows)
             product.selling_price = Decimal(min_price) / Decimal(100)
 
         self.session.commit()
@@ -345,7 +384,8 @@ class ListingBuilder:
             "listing_builder_created",
             sku=product.sku,
             preset=preset_name,
-            variation_cells=len(matrix),
+            variation_cells=len(matrix) or len(axis_rows),
+            variant_axes=[a["name"] for a in variant_axes] if variant_axes else None,
             personalization=personalization.name if personalization else None,
         )
         return product

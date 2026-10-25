@@ -103,6 +103,27 @@ class Product(Base):
     # Etsy
     etsy_listing_id = Column(String(50))
     etsy_section_id = Column(String(50))
+    # Multi-shipping-profile publish: each configured shipping profile (e.g.
+    # US/UK/DE) becomes its own Etsy listing for this product, so buyers in
+    # each region see region-appropriate shipping rates. {"US": "listing_id",
+    # "UK": "...", "DE": "..."} — filled in incrementally as each profile's
+    # listing succeeds; etsy_listing_id above mirrors the first one created.
+    etsy_listing_ids_by_profile = Column(
+        JSONB, default=dict, nullable=False, server_default="{}"
+    )
+    # Drafts left orphaned on Etsy when a publish failed after create_listing
+    # but before activate_listing — same shape, but these are NOT live/active
+    # and need manual review (edit-and-republish or delete) in Etsy's Drafts.
+    etsy_draft_listing_ids_by_profile = Column(
+        JSONB, default=dict, nullable=False, server_default="{}"
+    )
+
+    # Freely editable variant axes for this product, e.g.
+    # [{"name": "Color", "values": ["Gold","Silver"], "etsy_property_id": 200}].
+    # Seeded from supplier_options when available (see
+    # seed_variant_axes_from_rexven); add/rename/add-value all operate on this
+    # list. VariationRow.axis_values rows are the generated combinations.
+    variant_axes = Column(JSONB, default=list, nullable=False, server_default="[]")
 
     # Status
     status = Column(String(30), default=ProductStatus.MANUAL_INPUT.value)
@@ -762,7 +783,8 @@ class PricingStrategy(Base):
     base_multiplier = Column(Float, default=4.0)
 
     finish_offsets_pct = Column(
-        JSONB, default=lambda: {"Gold": 0.0, "Silver": -3.0, "Rose": -5.0}
+        JSONB,
+        default=lambda: {"Gold": 0.0, "Silver": -3.0, "Rose": -5.0, "Rose Gold": -5.0},
     )
 
     length_base_inches = Column(Integer, default=16)
@@ -775,6 +797,21 @@ class PricingStrategy(Base):
 
     # Multi-count surcharge (percent per extra unit)
     multi_count_extra_pct = Column(Float, default=12.0)
+
+    # Display only — Etsy's own API never receives an explicit currency from
+    # this app (price fields are plain numbers; currency is entirely implicit
+    # from the shop's own Etsy-side setting, e.g. SEK). This just controls
+    # how prices are shown in our own admin UI, e.g. "kr" as a suffix for a
+    # Swedish-currency shop instead of a hardcoded "$" prefix.
+    currency_symbol = Column(String(5), default="$")
+    currency_symbol_position = Column(String(10), default="prefix")  # "prefix" | "suffix"
+
+    # Per-shipping-profile price adjustment (%), applied on top of every
+    # variant's price when publishing that product's region-specific listing
+    # (publish_product_multi_profile) — e.g. {"US": 0, "UK": 5, "DE": 10} to
+    # price the DE listing 10% higher to cover its typically higher shipping
+    # cost. Keyed by the same region labels as Settings.SHIPPING_PROFILES.
+    region_price_adjustments_pct = Column(JSONB, default=dict)
 
 
 class PersonalizationTemplate(Base):
@@ -809,16 +846,28 @@ class ShopSection(Base):
 
 
 class VariationRow(Base):
-    """One row per cell in a product's Finish x Length x MultiCount matrix."""
+    """One row per sellable combination of a product's variant axes.
+
+    Two schemes coexist: legacy rows (finish/length_inches/multi_count, from a
+    VariationPreset) and the newer generic scheme (axis_values, from
+    Product.variant_axes — see seed_variant_axes_from_rexven). A row uses one
+    scheme or the other; payload_builder._build_inventory() branches on
+    whether axis_values is set.
+    """
 
     __tablename__ = "variation_rows"
 
     id = Column(Integer, primary_key=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
 
-    finish = Column(String(20), nullable=False)
+    # Legacy scheme (nullable so new axis_values-based rows don't need them).
+    finish = Column(String(20), nullable=True)
     length_inches = Column(Integer, nullable=True)
     multi_count = Column(Integer, nullable=True)
+
+    # Generic scheme: {"Color": "Gold", "Chain Style": "Snake"}, keyed by the
+    # axis names in the owning Product.variant_axes.
+    axis_values = Column(JSONB, nullable=True)
 
     price_cents = Column(Integer, nullable=False)
     sku_suffix = Column(String(40), nullable=False)
